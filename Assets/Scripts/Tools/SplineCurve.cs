@@ -1,6 +1,7 @@
 // Copyright 2026 The Open Brush Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -16,7 +17,18 @@ namespace TiltBrush
         {
             int count = stroke.m_SplineKnotCount;
             return count >= 2 && count <= MaxKnots &&
+                (stroke.m_SplineControlPoints == null || stroke.m_SplineControlPoints.Length == count) &&
                 (stroke.m_ControlPoints?.Length == GetSampleCount(count, closed: false) || IsClosed(stroke));
+        }
+
+        internal static TrTransform GetAuthoredPoint(StrokeData stroke, int index)
+        {
+            if (stroke.m_SplineControlPoints != null)
+                return stroke.m_SplineControlPoints[index];
+
+            // Legacy Catmull-Rom splines passed through every authored point.
+            var sample = stroke.m_ControlPoints[index * SamplesPerSegment];
+            return TrTransform.TR(sample.m_Pos, sample.m_Orient);
         }
 
         // Closed splines bake one extra segment ending at the first knot.
@@ -60,53 +72,62 @@ namespace TiltBrush
             return index < start + stride ? start + 2 * (index - start) : index + stride;
         }
 
-        // Centripetal Catmull–Rom passes through each placed knot and handles uneven spacing.
-        internal static void Sample(IReadOnlyList<TrTransform> knots, List<TrTransform> samples, bool closed = false)
+        // Open curves use a uniform clamped knot vector. Loops use a periodic cubic
+        // knot vector with control points wrapped across the seam.
+        internal static void Sample(IReadOnlyList<TrTransform> controls, List<TrTransform> samples, bool closed = false)
         {
             samples.Clear();
-            if (knots.Count == 0)
+            int count = controls.Count;
+            if (count == 0)
                 return;
 
-            samples.Add(knots[0]);
-            int knotCount = knots.Count;
-            int segmentCount = closed ? knotCount : knotCount - 1;
-            for (int i = 0; i < segmentCount; i++)
+            int distinct = 1;
+            while (distinct < count &&
+                (controls[distinct].translation - controls[0].translation).sqrMagnitude < 1e-12f)
+                distinct++;
+            if (distinct == count)
             {
-                var start = knots[i];
-                var end = knots[(i + 1) % knotCount];
-                Vector3 chord = end.translation - start.translation;
-                float length = chord.magnitude;
-                if (length < 0.000001f)
-                    continue;
-
-                Vector3 before = i > 0 || closed
-                    ? knots[(i + knotCount - 1) % knotCount].translation : start.translation - chord;
-                Vector3 after = i + 2 < knotCount || closed
-                    ? knots[(i + 2) % knotCount].translation : end.translation + chord;
-                float span = Mathf.Sqrt(length);
-                Vector3 startTangent = ChordTangent(start.translation - before, chord, span);
-                Vector3 endTangent = ChordTangent(after - end.translation, chord, span);
-                for (int step = 1; step < SamplesPerSegment; step++)
-                {
-                    float t = (float)step / SamplesPerSegment;
-                    float t2 = t * t;
-                    float t3 = t2 * t;
-                    Vector3 position = start.translation + (3 * t2 - 2 * t3) * chord +
-                        (t3 - 2 * t2 + t) * startTangent + (t3 - t2) * endTangent;
-                    samples.Add(TrTransform.TR(position, Quaternion.Slerp(start.rotation, end.rotation, t)));
-                }
-                samples.Add(end);
+                samples.Add(controls[0]);
+                return;
             }
-        }
 
-        private static Vector3 ChordTangent(Vector3 neighbor, Vector3 chord, float span)
-        {
-            float neighborSpan = Mathf.Sqrt(neighbor.magnitude);
-            if (neighborSpan < 0.001f)
-                return chord;
+            closed &= count >= 3;
+            int degree = closed ? 3 : Mathf.Min(3, count - 1);
+            int spans = closed ? count : count - degree;
+            int steps = GetSampleCount(count, closed) - 1;
+            Span<TrTransform> work = stackalloc TrTransform[4];
 
-            return (neighbor * (span / neighborSpan) + chord * (neighborSpan / span)) *
-                (span / (neighborSpan + span));
+            // De Boor evaluation retains the old baked sample count for stroke attributes.
+            for (int sample = 0; sample < steps; sample++)
+            {
+                float parameter = (float)sample * spans / steps;
+                int firstControl = Mathf.Min((int)parameter, spans - 1);
+                for (int j = 0; j <= degree; j++)
+                {
+                    int index = firstControl + j;
+                    work[j] = controls[closed ? (index + count - 1) % count : index];
+                }
+
+                for (int level = 1; level <= degree; level++)
+                {
+                    for (int j = degree; j >= level; j--)
+                    {
+                        int start = firstControl + j - degree;
+                        int end = start + degree - level + 1;
+                        if (!closed)
+                        {
+                            start = Mathf.Clamp(start, 0, spans);
+                            end = Mathf.Clamp(end, 0, spans);
+                        }
+                        float t = (parameter - start) / (end - start);
+                        work[j] = TrTransform.TR(
+                            Vector3.LerpUnclamped(work[j - 1].translation, work[j].translation, t),
+                            Quaternion.Lerp(work[j - 1].rotation, work[j].rotation, t));
+                    }
+                }
+                samples.Add(work[degree]);
+            }
+            samples.Add(closed ? samples[0] : controls[count - 1]);
         }
     }
 }

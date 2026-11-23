@@ -23,7 +23,8 @@ namespace TiltBrush
         private PointerManager.ControlPoint[] m_StartPoints;
         private PointerManager.ControlPoint[] m_EndPoints;
         private int m_StartKnotCount;
-        private int? m_EndKnotCount;
+        private TrTransform[] m_StartSplinePoints;
+        private TrTransform[] m_EndSplinePoints;
         private List<Color32?> m_StartColors;
         private List<Color32?> m_EndColors;
 
@@ -32,15 +33,16 @@ namespace TiltBrush
             m_TargetStroke = stroke;
             m_StartPoints = (PointerManager.ControlPoint[])stroke.m_ControlPoints.Clone();
             m_EndPoints = newControlPoints;
+            m_StartKnotCount = stroke.m_SplineKnotCount;
+            m_StartSplinePoints = stroke.m_SplineControlPoints;
         }
 
         public override bool NeedsSave { get { return true; } }
 
         internal ModifyStrokePointsCommand(Stroke stroke, PointerManager.ControlPoint[] newControlPoints,
-            int knotCount, List<Color32?> colors) : this(stroke, newControlPoints)
+            TrTransform[] splinePoints, List<Color32?> colors) : this(stroke, newControlPoints)
         {
-            m_StartKnotCount = stroke.m_SplineKnotCount;
-            m_EndKnotCount = knotCount;
+            m_EndSplinePoints = splinePoints;
             m_StartColors = stroke.m_OverrideColors;
             m_EndColors = colors;
         }
@@ -58,9 +60,14 @@ namespace TiltBrush
             m_TargetStroke.Recreate();
         }
 
-        private void ApplySplineMetadata(int count, List<Color32?> colors, int pointCount)
+        private void ApplySplineMetadata(int count, TrTransform[] splinePoints)
         {
             m_TargetStroke.m_SplineKnotCount = count;
+            m_TargetStroke.m_SplineControlPoints = splinePoints;
+        }
+
+        private void ApplySplineColors(List<Color32?> colors, int pointCount)
+        {
             m_TargetStroke.m_OverrideColors = colors;
             if (m_TargetStroke.m_ControlPointsToDrop?.Length != pointCount)
                 m_TargetStroke.m_ControlPointsToDrop = new bool[pointCount];
@@ -68,15 +75,25 @@ namespace TiltBrush
 
         protected override void OnRedo()
         {
-            if (m_EndKnotCount is int count)
-                ApplySplineMetadata(count, m_EndColors, m_EndPoints.Length);
+            if (m_EndSplinePoints != null)
+            {
+                ApplySplineMetadata(m_EndSplinePoints.Length, m_EndSplinePoints);
+                ApplySplineColors(m_EndColors, m_EndPoints.Length);
+            }
+            else if (m_StartSplinePoints != null)
+            {
+                // Arbitrary changes to the baked stroke cannot be expressed as the same hull.
+                ApplySplineMetadata(0, null);
+            }
             ApplyNewPositionsToStroke(m_EndPoints);
         }
 
         protected override void OnUndo()
         {
-            if (m_EndKnotCount.HasValue)
-                ApplySplineMetadata(m_StartKnotCount, m_StartColors, m_StartPoints.Length);
+            if (m_EndSplinePoints != null || m_StartSplinePoints != null)
+                ApplySplineMetadata(m_StartKnotCount, m_StartSplinePoints);
+            if (m_EndSplinePoints != null)
+                ApplySplineColors(m_StartColors, m_StartPoints.Length);
             ApplyNewPositionsToStroke(m_StartPoints);
         }
     }

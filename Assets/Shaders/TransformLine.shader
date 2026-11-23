@@ -16,6 +16,8 @@ Shader "Custom/TransformLine" {
 Properties {
   _Color ("Color", Color) = (0, 1, 1, 1)
   [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("Depth Test", Float) = 4
+  [Enum(UnityEngine.Rendering.CullMode)] _Cull ("Cull Mode", Float) = 1
+  [Toggle] _ZWrite ("Depth Write", Float) = 1
 }
 
 Category {
@@ -23,8 +25,9 @@ Category {
     Tags { "RenderPipeline"="UniversalPipeline" }
   Pass {
 
-      Cull Front
+      Cull [_Cull]
       ZTest [_ZTest]
+      ZWrite [_ZWrite]
 
       HLSLPROGRAM
       #pragma vertex vert

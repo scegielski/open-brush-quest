@@ -14,6 +14,8 @@ namespace TiltBrush
 
         private const float kSplineHandleSize = 0.065f;
         private const float kSplinePickRadius = 0.095f;
+        private const float kSplineHandleGrabRadius = 0.16f;
+        private const float kSplineHullWidth = 0.009f;
         private const float kSplineMinimumSpacing = 0.011f;
 
         private readonly List<TrTransform> m_SplineKnots = new();
@@ -26,6 +28,8 @@ namespace TiltBrush
         private CanvasScript m_SplineCanvas;
         private SketchMemoryScript m_SplineMemory;
         private GameObject m_SplinePreview;
+        private LineRenderer m_SplineHull;
+        private Material m_SplineHullMaterial;
         private bool m_SplinePreviewDirty;
         private BaseBrushScript m_DraftSplinePreviewBrush;
         private Material m_SplineMaterial;
@@ -37,6 +41,7 @@ namespace TiltBrush
         private bool m_SplineClosed;
         private Stroke m_EditableSpline;
         private PointerManager.ControlPoint[] m_LastAppliedSplinePoints;
+        private TrTransform[] m_LastAppliedSplineControls;
         private BaseBrushScript m_SavedSplinePreviewBrush;
         private SplineAction m_SplineAction;
         private GameObject m_SplineActionMenu;
@@ -130,7 +135,7 @@ namespace TiltBrush
             }
             else
             {
-                highlighted = EditSplineAtCursor(cursor, pickRadius);
+                highlighted = EditSplineAtCursor(cursor, pickRadius, kSplineHandleGrabRadius / worldFromCanvas.scale);
             }
             MoveSplineKnot(cursor);
             UpdateSplineBrushPreview();
@@ -243,12 +248,12 @@ namespace TiltBrush
             return nearest;
         }
 
-        private int EditSplineAtCursor(TrTransform cursor, float radius)
+        private int EditSplineAtCursor(TrTransform cursor, float radius, float handleRadius)
         {
             int nearest = m_SplineAction switch
             {
-                SplineAction.Move or SplineAction.Delete => FindHoveredSplineKnot(cursor.translation, radius),
-                SplineAction.Append when !m_SplineClosed => FindHoveredSplineKnot(cursor.translation, radius, endpointsOnly: true),
+                SplineAction.Move or SplineAction.Delete => FindHoveredSplineKnot(cursor.translation, handleRadius),
+                SplineAction.Append when !m_SplineClosed => FindHoveredSplineKnot(cursor.translation, handleRadius, endpointsOnly: true),
                 _ => m_DraggedSplineKnot
             };
             if (!m_brushTriggerDown)
@@ -355,6 +360,19 @@ namespace TiltBrush
                 m_SplineSamples.Count != SplineCurve.GetSampleCount(m_SplineKnots.Count, m_SplineClosed))
                 return index;
 
+            int hullSegments = m_SplineClosed ? m_SplineKnots.Count : m_SplineKnots.Count - 1;
+            for (int i = 0; i < hullSegments; i++)
+            {
+                float distance = DistanceToSplineSegmentSquared(position, m_SplineKnots[i].translation,
+                    m_SplineKnots[(i + 1) % m_SplineKnots.Count].translation, out float t);
+                if (distance < closest)
+                {
+                    closest = distance;
+                    index = i + 1;
+                    segmentT = t;
+                }
+            }
+
             for (int i = 1; i < m_SplineSamples.Count; i++)
             {
                 Vector3 start = m_SplineSamples[i - 1].translation;
@@ -424,7 +442,7 @@ namespace TiltBrush
                 if (m_EditableSpline != null)
                 {
                     RestoreSavedSplineGeometry();
-                    m_SplinePreviewDirty = false;
+                    LoadSavedSplineKnots();
                     return;
                 }
             }
@@ -496,6 +514,7 @@ namespace TiltBrush
         private void SampleSpline()
         {
             SplineCurve.Sample(m_SplineKnots, m_SplineSamples, m_SplineClosed);
+            UpdateSplineHull();
             uint time = (uint)(App.Instance.CurrentSketchTime * 1000);
             m_SplineStrokePoints.Clear();
             foreach (var sample in m_SplineSamples)
@@ -615,7 +634,8 @@ namespace TiltBrush
                 m_EditableSpline = null;
                 LoadSavedSplineKnots();
             }
-            else if (m_LastAppliedSplinePoints != m_EditableSpline.m_ControlPoints)
+            else if (m_LastAppliedSplinePoints != m_EditableSpline.m_ControlPoints ||
+                     m_LastAppliedSplineControls != m_EditableSpline.m_SplineControlPoints)
             {
                 // Undo, redo and other stroke tools can replace the control points.
                 LoadSavedSplineKnots();
@@ -635,16 +655,18 @@ namespace TiltBrush
             m_SplineStrokePoints.Clear();
 
             m_LastAppliedSplinePoints = m_EditableSpline?.m_ControlPoints;
+            m_LastAppliedSplineControls = m_EditableSpline?.m_SplineControlPoints;
             m_SplineClosed = m_EditableSpline != null && SplineCurve.IsClosed(m_EditableSpline);
             if (m_EditableSpline != null)
             {
                 for (int i = 0; i < m_EditableSpline.m_SplineKnotCount; i++)
-                {
-                    var point = m_LastAppliedSplinePoints[i * SplineCurve.SamplesPerSegment];
-                    AddSplineKnot(TrTransform.TR(point.m_Pos, point.m_Orient));
-                }
+                    AddSplineKnot(SplineCurve.GetAuthoredPoint(m_EditableSpline, i));
+
+                foreach (var sample in m_LastAppliedSplinePoints)
+                    m_SplineSamples.Add(TrTransform.TR(sample.m_Pos, sample.m_Orient));
+                m_SplineStrokePoints.AddRange(m_LastAppliedSplinePoints);
             }
-            SampleSpline();
+            UpdateSplineHull();
             m_SplinePreviewDirty = false;
         }
 
@@ -763,9 +785,10 @@ namespace TiltBrush
             ReleaseSavedSplinePreview();
             if (m_EditableSpline.m_Object != null)
                 m_EditableSpline.m_Object.SetActive(false);
-            var command = new ModifyStrokePointsCommand(m_EditableSpline, points, m_SplineKnots.Count, colors);
+            var command = new ModifyStrokePointsCommand(m_EditableSpline, points, m_SplineKnots.ToArray(), colors);
             m_SplineMemory.PerformAndRecordCommand(command);
             m_LastAppliedSplinePoints = points;
+            m_LastAppliedSplineControls = m_EditableSpline.m_SplineControlPoints;
             m_SplinePreviewDirty = false;
         }
 
@@ -791,6 +814,7 @@ namespace TiltBrush
                 m_Color = App.BrushColor.CurrentColor,
                 m_ControlPoints = points,
                 m_SplineKnotCount = m_SplineKnots.Count,
+                m_SplineControlPoints = m_SplineKnots.ToArray(),
                 m_ControlPointsToDrop = new bool[points.Length]
             };
             if (!SplineCurve.IsEditable(stroke))
@@ -818,15 +842,43 @@ namespace TiltBrush
                     m_SplineMaterial.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Overlay;
                     m_SplineSelectedMaterial = new Material(m_SplineMaterial);
                     m_SplineSelectedMaterial.SetColor("_Color", new Color(1f, 0.78f, 0.25f));
+                    m_SplineHullMaterial = new Material(m_SplineMaterial);
+                    m_SplineHullMaterial.SetColor("_Color", new Color(0.06f, 0.42f, 0.54f));
+                    m_SplineHullMaterial.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+                    m_SplineHullMaterial.SetFloat("_ZWrite", 0);
+                    m_SplineHullMaterial.renderQueue = m_SplineMaterial.renderQueue - 1;
                 }
+                m_SplineHull = m_SplinePreview.AddComponent<LineRenderer>();
+                m_SplineHull.sharedMaterial = m_SplineHullMaterial;
+                m_SplineHull.useWorldSpace = false;
+                m_SplineHull.positionCount = 0;
+                m_SplineHull.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                m_SplineHull.receiveShadows = false;
+                UpdateSplineHull();
             }
             if (m_SplinePreview != null)
+            {
                 m_SplinePreview.SetActive(visible);
+                if (visible)
+                    m_SplineHull.widthMultiplier = kSplineHullWidth / m_SplineCanvas.Pose.scale;
+            }
             if (!visible)
             {
                 PauseSplineInput();
                 ClearSplineBrushPreview();
             }
+        }
+
+        private void UpdateSplineHull()
+        {
+            if (m_SplineHull == null)
+                return;
+
+            int count = m_SplineKnots.Count;
+            m_SplineHull.loop = m_SplineClosed;
+            m_SplineHull.positionCount = count >= 2 ? count : 0;
+            for (int i = 0; i < m_SplineHull.positionCount; i++)
+                m_SplineHull.SetPosition(i, m_SplineKnots[i].translation);
         }
 
         private void PauseSplineInput()
@@ -843,6 +895,7 @@ namespace TiltBrush
             RestoreSavedSplineGeometry();
             m_EditableSpline = null;
             m_LastAppliedSplinePoints = null;
+            m_LastAppliedSplineControls = null;
             if (m_SplineMemory != null)
                 m_SplineMemory.SketchClearing -= OnSplineSketchClearing;
             m_SplineMemory = null;
@@ -867,6 +920,7 @@ namespace TiltBrush
                 m_SplinePreview.SetActive(false);
                 Destroy(m_SplinePreview);
                 m_SplinePreview = null;
+                m_SplineHull = null;
             }
         }
 
@@ -1041,6 +1095,7 @@ namespace TiltBrush
             Destroy(m_SplineActionMenuMesh);
             Destroy(m_SplineMaterial);
             Destroy(m_SplineSelectedMaterial);
+            Destroy(m_SplineHullMaterial);
             base.OnDestroy();
         }
 

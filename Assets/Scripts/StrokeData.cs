@@ -32,8 +32,9 @@ namespace TiltBrush
         // m_BrushSize * m_BrushScale = size in local/canvas space
         public float m_BrushScale;
         public PointerManager.ControlPoint[] m_ControlPoints;
-        // Authored spline knots are evenly indexed among the baked control points.
+        // Older splines stored their authored points at fixed positions in the baked samples.
         public int m_SplineKnotCount;
+        public TrTransform[] m_SplineControlPoints;
         public SketchMemoryScript.StrokeFlags m_Flags;
         // Seed for deterministic pseudo-random numbers for geometry generation.
         // Not currently serialized.
@@ -87,6 +88,7 @@ namespace TiltBrush
                 this.m_ControlPoints = new PointerManager.ControlPoint[existing.m_ControlPoints.Length];
                 Array.Copy(existing.m_ControlPoints, this.m_ControlPoints, this.m_ControlPoints.Length);
                 this.m_SplineKnotCount = existing.m_SplineKnotCount;
+                this.m_SplineControlPoints = (TrTransform[])existing.m_SplineControlPoints?.Clone();
 
                 // Copy per-point color data if present
                 this.m_ColorOverrideMode = existing.m_ColorOverrideMode;

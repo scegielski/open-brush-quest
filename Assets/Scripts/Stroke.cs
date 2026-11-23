@@ -409,6 +409,10 @@ namespace TiltBrush
                 m_ControlPoints[i] = point;
             }
 
+            if (m_SplineControlPoints != null)
+                m_SplineControlPoints = Array.ConvertAll(m_SplineControlPoints, point =>
+                    TrTransform.TR(leftTransform * point.translation, leftTransform.rotation * point.rotation));
+
             m_BrushScale *= absoluteScale
                 ? Mathf.Abs(leftTransform.scale)
                 : leftTransform.scale;
@@ -424,6 +428,10 @@ namespace TiltBrush
                 point.m_Orient = leftTransform.rotation * point.m_Orient;
                 m_ControlPoints[i] = point;
             }
+
+            if (m_SplineControlPoints != null)
+                m_SplineControlPoints = Array.ConvertAll(m_SplineControlPoints, point =>
+                    TrTransform.TR(leftTransform.MultiplyPoint3x4(point.translation), leftTransform.rotation * point.rotation));
 
             m_BrushScale *= Mathf.Abs(leftTransform.lossyScale.x);
             InvalidateCopy();

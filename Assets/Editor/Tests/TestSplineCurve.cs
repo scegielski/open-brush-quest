@@ -17,22 +17,23 @@ namespace TiltBrush
         private readonly List<TrTransform> m_Samples = new();
 
         [Test]
-        public void CurvePassesThroughKnotsInOrderAfterMovingOne()
+        public void OpenCubicCurveClampsTheEndsAndBlendsTheInteriorControls()
         {
             var knots = new[]
             {
                 TrTransform.T(Vector3.zero),
-                TrTransform.T(new Vector3(1, 2, 3)),
-                TrTransform.T(new Vector3(4, 3, 2))
+                TrTransform.T(new Vector3(0, 4, 0)),
+                TrTransform.T(new Vector3(4, 4, 0)),
+                TrTransform.T(new Vector3(4, 0, 0))
             };
             SplineCurve.Sample(knots, m_Samples);
-            var previous = m_Samples.ToArray();
-            knots[1].translation += Vector3.up;
+            int middle = m_Samples.Count / 2;
+            Assert.That(m_Samples[middle].translation, Is.EqualTo(new Vector3(2, 3, 0)));
+            knots[1].translation += 8 * Vector3.up;
             SplineCurve.Sample(knots, m_Samples);
             Assert.That(m_Samples[0].translation, Is.EqualTo(knots[0].translation));
-            Assert.That(m_Samples[m_Samples.Count - 1].translation, Is.EqualTo(knots[2].translation));
-            Assert.That(m_Samples.Any(p => p.translation == knots[1].translation), Is.True);
-            Assert.That(previous.Any(p => p.translation == knots[1].translation), Is.False);
+            Assert.That(m_Samples[m_Samples.Count - 1].translation, Is.EqualTo(knots[3].translation));
+            Assert.That(m_Samples[middle].translation, Is.EqualTo(new Vector3(2, 6, 0)));
         }
 
         [Test]
@@ -48,11 +49,15 @@ namespace TiltBrush
                 p.translation.z >= 0 && p.translation.z <= 1), Is.True);
         }
 
-        [TestCase(false, false)]
-        [TestCase(true, false)]
-        [TestCase(false, true)]
-        [TestCase(true, true)]
-        public void SavedSplineKeepsEditableKnots(bool embedBrushGuids, bool closed)
+        [TestCase(false, false, false)]
+        [TestCase(true, false, false)]
+        [TestCase(false, true, false)]
+        [TestCase(true, true, false)]
+        [TestCase(false, false, true)]
+        [TestCase(true, false, true)]
+        [TestCase(false, true, true)]
+        [TestCase(true, true, true)]
+        public void SavedSplineKeepsEditableControls(bool embedBrushGuids, bool closed, bool legacy)
         {
             var scene = SceneManager.GetSceneByPath("Assets/Scenes/Main.unity");
             bool openedScene = !scene.isLoaded;
@@ -65,10 +70,17 @@ namespace TiltBrush
                 var knots = new[]
                 {
                     TrTransform.T(Vector3.zero),
-                    TrTransform.T(new Vector3(0.2f, 0.8f, 2f)),
+                    TrTransform.TR(new Vector3(0.2f, 0.8f, 2f), Quaternion.Euler(15, 32, 9)),
                     TrTransform.T(new Vector3(3f, 1f, 2f))
                 };
                 SplineCurve.Sample(knots, m_Samples, closed);
+                if (legacy)
+                {
+                    for (int i = 0; i < knots.Length; i++)
+                        m_Samples[i * SplineCurve.SamplesPerSegment] = knots[i];
+                    if (closed)
+                        m_Samples[m_Samples.Count - 1] = knots[0];
+                }
                 var stroke = new StrokeData
                 {
                     m_BrushGuid = Guid.NewGuid(),
@@ -76,6 +88,7 @@ namespace TiltBrush
                     m_BrushScale = 1,
                     m_BrushSize = 0.15f,
                     m_SplineKnotCount = knots.Length,
+                    m_SplineControlPoints = legacy ? null : knots,
                     m_ControlPoints = m_Samples.Select(point => new PointerManager.ControlPoint
                     {
                         m_Pos = point.translation,
@@ -83,7 +96,7 @@ namespace TiltBrush
                         m_Pressure = 1
                     }).ToArray()
                 };
-                var ordinaryStroke = new StrokeData(stroke) { m_SplineKnotCount = 0 };
+                var ordinaryStroke = new StrokeData(stroke) { m_SplineKnotCount = 0, m_SplineControlPoints = null };
                 var snapshots = new[]
                 {
                     new SketchWriter.AdjustedMemoryBrushStroke { strokeData = stroke },
@@ -105,10 +118,10 @@ namespace TiltBrush
                 Assert.That(SplineCurve.IsEditable(loaded[0]), Is.True);
                 Assert.That(SplineCurve.IsClosed(loaded[0]), Is.EqualTo(closed));
                 Assert.That(SplineCurve.IsEditable(loaded[1]), Is.False);
+                Assert.That(loaded[0].m_SplineControlPoints == null, Is.EqualTo(legacy));
                 Assert.That(loaded[0].m_BrushGuid, Is.EqualTo(stroke.m_BrushGuid));
                 for (int i = 0; i < knots.Length; i++)
-                    Assert.That(loaded[0].m_ControlPoints[i * SplineCurve.SamplesPerSegment].m_Pos,
-                        Is.EqualTo(knots[i].translation));
+                    Assert.That(SplineCurve.GetAuthoredPoint(loaded[0], i), Is.EqualTo(knots[i]));
             }
             finally
             {
@@ -153,7 +166,9 @@ namespace TiltBrush
             SplineCurve.Sample(knots, m_Samples, closed: true);
             int stride = SplineCurve.SamplesPerSegment;
             Assert.That(m_Samples.Count, Is.EqualTo(3 * stride + 1));
-            Assert.That(m_Samples[3 * stride], Is.EqualTo(knots[0]));
+            Assert.That(m_Samples[3 * stride], Is.EqualTo(m_Samples[0]));
+            Assert.That(Vector3.Distance(m_Samples[0].translation, (Vector3.right + Vector3.up) / 6f),
+                Is.LessThan(1e-6f));
             Assert.That(SplineCurve.GetSourceSampleIndex(3 * stride, 3, 4, 3, 0.5f, oldClosed: true),
                 Is.EqualTo(2 * stride + stride / 2));
             Assert.That(SplineCurve.GetSourceSampleIndex(4 * stride, 3, 4, 3, 0.5f, oldClosed: true),

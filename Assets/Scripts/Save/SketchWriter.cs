@@ -81,6 +81,7 @@ namespace TiltBrush
             SymmetryPointerIndex = 1 << 6, // int32, which of the symmetry's pointers drew this
             SplineKnotCount = 1 << 7, // int32; baked sample index stride is fixed by SplineCurve
             ControlPointColors = 1 << 16, // Variable-length: Color32[] + ColorControlMode; per-point colors
+            SplineControlPoints = 1 << 17, // Variable-length: authored B-spline positions and rotations
         }
 
         [Flags]
@@ -378,6 +379,47 @@ namespace TiltBrush
         }
 
         private const int REQUIRED_SKETCH_VERSION_MIN = 5;
+        private const int kSplineControlPointBytes = 7 * sizeof(float);
+
+        private static StrokeExtension GetSplineExtension(StrokeData stroke)
+        {
+            if (!SplineCurve.IsEditable(stroke))
+                return StrokeExtension.None;
+            return stroke.m_SplineControlPoints == null
+                ? StrokeExtension.SplineKnotCount : StrokeExtension.SplineControlPoints;
+        }
+
+        private static void WriteSplineControlPoints(SketchBinaryWriter writer, TrTransform[] points)
+        {
+            writer.UInt32((uint)(points.Length * kSplineControlPointBytes));
+            foreach (var point in points)
+            {
+                writer.Vec3(point.translation);
+                writer.Quaternion(point.rotation);
+            }
+        }
+
+        private static bool ReadSplineControlPoints(SketchBinaryReader reader, StrokeData stroke)
+        {
+            uint bytes = reader.UInt32();
+            uint count = bytes / kSplineControlPointBytes;
+            if (bytes % kSplineControlPointBytes != 0 || count < 2 || count > SplineCurve.MaxKnots)
+                return reader.Skip(bytes);
+
+            var points = new TrTransform[count];
+            bool valid = true;
+            for (int i = 0; i < points.Length; i++)
+            {
+                points[i] = TrTransform.TR(reader.Vec3(), reader.Quaternion());
+                valid &= points[i].IsFinite();
+            }
+            if (valid)
+            {
+                stroke.m_SplineControlPoints = points;
+                stroke.m_SplineKnotCount = points.Length;
+            }
+            return true;
+        }
         private const int REQUIRED_SKETCH_VERSION_MAX = 6;
         private static readonly uint SKETCH_SENTINEL = 0xc576a5cd; // introduced at v5
         // 5: added sketch sentinel, explicit version
@@ -519,7 +561,7 @@ namespace TiltBrush
                 if (stroke.m_BrushScale != 1) { strokeExtensionMask |= StrokeExtension.Scale; }
                 if (stroke.Group != SketchGroupTag.None) { strokeExtensionMask |= StrokeExtension.Group; }
                 strokeExtensionMask |= StrokeExtension.Layer;
-                if (SplineCurve.IsEditable(stroke)) { strokeExtensionMask |= StrokeExtension.SplineKnotCount; }
+                strokeExtensionMask |= GetSplineExtension(stroke);
                 if (stroke.m_OverrideColors != null) { strokeExtensionMask |= StrokeExtension.ControlPointColors; }
                 uint symmetryGroupId = symmetryTable?.GetGroupId(stroke) ?? 0;
                 if (symmetryGroupId != 0)
@@ -608,6 +650,9 @@ namespace TiltBrush
                         }
                     }
                 }
+
+                if ((strokeExtensionMask & StrokeExtension.SplineControlPoints) != 0)
+                    WriteSplineControlPoints(writer, stroke.m_SplineControlPoints);
 
                 // Control points
                 writer.Int32(stroke.m_ControlPoints.Length);
@@ -672,7 +717,7 @@ namespace TiltBrush
                 if (stroke.m_BrushScale != 1) { strokeExtensionMask |= StrokeExtension.Scale; }
                 if (stroke.Group != SketchGroupTag.None) { strokeExtensionMask |= StrokeExtension.Group; }
                 strokeExtensionMask |= StrokeExtension.Layer;
-                if (SplineCurve.IsEditable(stroke)) { strokeExtensionMask |= StrokeExtension.SplineKnotCount; }
+                strokeExtensionMask |= GetSplineExtension(stroke);
                 if (stroke.m_OverrideColors != null) { strokeExtensionMask |= StrokeExtension.ControlPointColors; }
                 uint symmetryGroupId = symmetryTable?.GetGroupId(stroke) ?? 0;
                 if (symmetryGroupId != 0)
@@ -761,6 +806,9 @@ namespace TiltBrush
                         }
                     }
                 }
+
+                if ((strokeExtensionMask & StrokeExtension.SplineControlPoints) != 0)
+                    WriteSplineControlPoints(writer, stroke.m_SplineControlPoints);
 
                 // Control points
                 writer.Int32(stroke.m_ControlPoints.Length);
@@ -1016,6 +1064,9 @@ namespace TiltBrush
                         case StrokeExtension.SplineKnotCount:
                             stroke.m_SplineKnotCount = reader.Int32();
                             break;
+                        case StrokeExtension.SplineControlPoints:
+                            if (!ReadSplineControlPoints(reader, stroke)) { return null; }
+                            break;
                         default:
                             {
                                 // Skip unknown extension.
@@ -1249,6 +1300,9 @@ namespace TiltBrush
                             break;
                         case StrokeExtension.SplineKnotCount:
                             stroke.m_SplineKnotCount = reader.Int32();
+                            break;
+                        case StrokeExtension.SplineControlPoints:
+                            if (!ReadSplineControlPoints(reader, stroke)) { return null; }
                             break;
                         default:
                             {
