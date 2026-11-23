@@ -44,7 +44,7 @@ Shader "Custom/Grid3D"
     {
     Tags { "RenderPipeline"="UniversalPipeline" }
         Tags { "Queue" = "Transparent" }
-        Blend One One
+        Blend One One, One OneMinusSrcAlpha
         Cull Off Lighting Off ZWrite Off
         LOD 100
 
@@ -270,8 +270,7 @@ Shader "Custom/Grid3D"
             fixed4 frag (v2f i) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
-                return saturate(i.pos) * _Color;
-                // return i.pos * _Color;
+                return saturate(i.pos.rrrr) * _Color;
             }
             ENDHLSL
         }

@@ -15,6 +15,7 @@
 Shader "Custom/TransformLine" {
 Properties {
   _Color ("Color", Color) = (0, 1, 1, 1)
+  [Enum(UnityEngine.Rendering.CompareFunction)] _ZTest ("Depth Test", Float) = 4
 }
 
 Category {
@@ -23,6 +24,7 @@ Category {
   Pass {
 
       Cull Front
+      ZTest [_ZTest]
 
       HLSLPROGRAM
       #pragma vertex vert

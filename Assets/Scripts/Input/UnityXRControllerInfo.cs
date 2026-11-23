@@ -621,20 +621,22 @@ namespace TiltBrush
 
         public override void TriggerControllerHaptics(float seconds)
         {
+            if (AndroidXRHandBridge.UseHand(isBrush) || !device.isValid)
+                return;
+            var controls = App.VrSdk.VrControls;
+            device.SendHapticImpulse(0, controls.HapticsAmplitudeScale, seconds * controls.HapticsDurationScale);
+        }
+
+        internal void SendHapticImpulse(float amplitude, float durationSeconds)
+        {
             // Tracked hands don't provide controller haptics through this path.
             if (AndroidXRHandBridge.UseHand(isBrush))
                 return;
 
             if (!device.isValid)
-                return;
-
-            float durationSeconds =
-                seconds * App.VrSdk.VrControls.HapticsDurationScale;
-
-            device.SendHapticImpulse(
-                0,
-                App.VrSdk.VrControls.HapticsAmplitudeScale,
-                durationSeconds);
+                device = FindControllerDevice();
+            if (device.isValid)
+                device.SendHapticImpulse(0, amplitude, durationSeconds);
         }
     }
 }

@@ -1227,7 +1227,9 @@ namespace TiltBrush
                         m_SketchSurfacePanel.AllowDrawing(m_InputStateConfigs[(int)m_CurrentInputState].m_AllowDrawing);
                         m_SketchSurfacePanel.UpdateCurrentTool();
 
-                        PointerManager.m_Instance.AllowPointerPreviewLine(IsFreepaintToolReady());
+                        bool hasSplinePreview = m_SketchSurfacePanel.ActiveTool is FreePaintTool freePaint &&
+                            freePaint.UsesSplinePreview;
+                        PointerManager.m_Instance.AllowPointerPreviewLine(IsFreepaintToolReady() && !hasSplinePreview);
                         //keep transform gizmo at sketch surface pos
                         m_TransformGizmo.transform.position = m_SketchSurface.transform.position;
                         bool bGizmoActive = m_InputStateConfigs[(int)m_CurrentInputState].m_ShowGizmo && m_SketchSurfacePanel.ShouldShowTransformGizmo();
@@ -1738,9 +1740,16 @@ namespace TiltBrush
             UnityEngine.Profiling.Profiler.EndSample();
         }
 
+        private FreePaintTool SplineDraftTool =>
+            m_SketchSurfacePanel.ActiveTool is FreePaintTool freePaint && freePaint.OwnsSplineDraftHistory
+                ? freePaint : null;
+
+        private bool HasUndoHistory => SplineDraftTool?.CanUndoSplineDraft ?? SketchMemoryScript.m_Instance.CanUndo();
+        private bool HasRedoHistory => SplineDraftTool?.CanRedoSplineDraft ?? SketchMemoryScript.m_Instance.CanRedo();
+
         bool CanUndo()
         {
-            return SketchMemoryScript.m_Instance.CanUndo() &&
+            return HasUndoHistory &&
                 !IsUIBlockingUndoRedo() &&
                 m_PanelManager.GazePanelsAreVisible() &&
                 !m_GrabWand.grabbingWorld &&
@@ -1751,7 +1760,7 @@ namespace TiltBrush
 
         bool CanRedo()
         {
-            return SketchMemoryScript.m_Instance.CanRedo() &&
+            return HasRedoHistory &&
                 !IsUIBlockingUndoRedo() &&
                 m_PanelManager.GazePanelsAreVisible() &&
                 !m_GrabBrush.grabbingWorld &&
@@ -4826,10 +4835,16 @@ namespace TiltBrush
                     }
                     break;
                 case GlobalCommands.Undo:
-                    SketchMemoryScript.m_Instance.StepBack();
+                    if (SplineDraftTool is { } undoDraft)
+                        undoDraft.StepSplineDraft(redo: false);
+                    else
+                        SketchMemoryScript.m_Instance.StepBack();
                     break;
                 case GlobalCommands.Redo:
-                    SketchMemoryScript.m_Instance.StepForward();
+                    if (SplineDraftTool is { } redoDraft)
+                        redoDraft.StepSplineDraft(redo: true);
+                    else
+                        SketchMemoryScript.m_Instance.StepForward();
                     break;
                 case GlobalCommands.AudioVisualization: // Intentionally blank.
                     break;
@@ -5687,9 +5702,9 @@ namespace TiltBrush
                     return false;
 #endif
                 case GlobalCommands.Undo:
-                    return SketchMemoryScript.m_Instance.CanUndo() && !(MultiplayerManager.m_Instance.State == ConnectionState.IN_ROOM);
+                    return HasUndoHistory && !(MultiplayerManager.m_Instance.State == ConnectionState.IN_ROOM);
                 case GlobalCommands.Redo:
-                    return SketchMemoryScript.m_Instance.CanRedo() && !(MultiplayerManager.m_Instance.State == ConnectionState.IN_ROOM);
+                    return HasRedoHistory && !(MultiplayerManager.m_Instance.State == ConnectionState.IN_ROOM);
                 case GlobalCommands.Save:
                     bool canSave =
                         SaveLoadScript.m_Instance.SceneFile.Valid &&

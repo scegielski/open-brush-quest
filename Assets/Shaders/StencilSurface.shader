@@ -235,11 +235,10 @@ SubShader {
 Tags {"Queue"="Transparent" "IgnoreProjector"="True" "RenderType"="TransparentCutout"}
 
 LOD 100
-ColorMask RGB
 
 ZWrite Off
 Cull Off
-Blend SrcAlpha OneMinusSrcAlpha // overlay
+Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
 
 // Single URP-compatible pass: branches on VFACE to apply the original two-pass
 // behavior. URP's forward renderer dispatches only one pass per material per

@@ -808,6 +808,11 @@ namespace TiltBrush
             }
 
             ViewpointScript.m_Instance.Init();
+            var startupEnvironment = EnvironmentCatalog.m_Instance.DefaultEnvironment;
+            if (Application.platform == RuntimePlatform.Android && startupEnvironment.isPassthrough)
+            {
+                SceneSettings.m_Instance.SetDesiredPreset(startupEnvironment, skipFade: true);
+            }
             QualityControls.m_Instance.Init();
             bool bVR = VrSdk.GetHmdDof() != TiltBrush.VrSdk.DoF.None;
             InputManager.m_Instance.AllowVrControllers = bVR;
@@ -1014,7 +1019,8 @@ namespace TiltBrush
                                 OnIntroComplete(markTutorialComplete: false);
                                 PanelManager.m_Instance.ReviveFloatingPanelsForStartup();
                             }
-                            else if (!VrSdk.IsHmdInitialized() ||
+                            else if (SkipIntroForAndroid ||
+                                     !VrSdk.IsHmdInitialized() ||
                                      UserConfig.Flags.SkipIntro ||
                                      UserConfig.Flags.DisableXrMode ||
                                      UserConfig.Flags.EnableMonoscopicMode)
@@ -1451,7 +1457,10 @@ namespace TiltBrush
                 case AppState.LoadingBrushesAndLighting:
                     BrushCatalog.m_Instance.BeginReload();
                     EnvironmentCatalog.m_Instance.BeginReload();
-                    CreateIntroSketch();
+                    if (!SkipIntroForAndroid && !UserConfig.Flags.SkipIntro)
+                    {
+                        CreateIntroSketch();
+                    }
                     break;
                 case AppState.FadeFromBlack:
                     ViewpointScript.m_Instance.FadeToScene(1.0f / m_FadeFromBlackDuration);
@@ -1748,6 +1757,8 @@ namespace TiltBrush
                 m_SketchSurfacePanel.EnableRenderer(false);
             }
         }
+
+        private static bool SkipIntroForAndroid => Application.platform == RuntimePlatform.Android;
 
         void OnIntroComplete(bool markTutorialComplete = true)
         {

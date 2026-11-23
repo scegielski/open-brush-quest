@@ -62,6 +62,7 @@ namespace TiltBrush
         static public PanelManager m_Instance;
 
         public const string kPlayerPrefAdvancedMode = "AdvancedMode";
+        private const int kDefaultAdvancedMode = 1;
 
         [SerializeField] protected PanelMapKey[] m_PanelMap;
 
@@ -417,7 +418,7 @@ namespace TiltBrush
                     return data.m_MapKey.m_ViewOnly;
                 case PanelAvailabilityMode.Multiplayer:
                     return data.m_MapKey.m_Multiplayer && IsPanelInEditingLevel(data,
-                        PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, 0) == 1);
+                        PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, kDefaultAdvancedMode) == 1);
                 default:
                     return false;
             }
@@ -474,7 +475,7 @@ namespace TiltBrush
                 return;
             }
 
-            SetPanelAvailabilityMode(PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, 0) == 1
+            SetPanelAvailabilityMode(PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, kDefaultAdvancedMode) == 1
                 ? PanelAvailabilityMode.Advanced
                 : PanelAvailabilityMode.Beginner);
         }
@@ -552,7 +553,7 @@ namespace TiltBrush
             m_SketchbookScale = 0.0f;
 
             // Start with advanced panels off.
-            m_PanelAvailabilityMode = PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, 0) == 1
+            m_PanelAvailabilityMode = PlayerPrefs.GetInt(kPlayerPrefAdvancedMode, kDefaultAdvancedMode) == 1
                 ? PanelAvailabilityMode.Advanced
                 : PanelAvailabilityMode.Beginner;
 
@@ -1306,28 +1307,29 @@ namespace TiltBrush
 
         public void ResetWandPanelsConfiguration()
         {
-            for (int i = 0; i < m_AllPanels.Count; ++i)
+            foreach (PanelData data in m_AllPanels)
             {
-                if (m_AllPanels[i].m_Panel.gameObject.activeSelf)
-                {
-                    m_AllPanels[i].m_Panel.ResetPanel();
+                BasePanel panel = data.m_Panel;
+                if (!data.AvailableInCurrentMode || (!panel.gameObject.activeSelf && !panel.BeginFixed))
+                    continue;
 
-                    // If the panel begins fixed, restore.
-                    if (m_AllPanels[i].m_Panel.BeginFixed)
+                panel.ResetPanel();
+                if (panel.BeginFixed)
+                {
+                    panel.ResetPanelToInitialPosition();
+                    if (m_PanelsState == PanelsState.Visible || m_PanelsState == PanelsState.Entering)
                     {
-                        m_AllPanels[i].m_Panel.ResetPanelToInitialPosition();
-                    }
-                    else
-                    {
-                        // Otherwise, hide.
-                        m_AllPanels[i].m_Panel.m_Fixed = false;
-                        if (m_AllPanels[i].m_Widget != null)
-                        {
-                            m_AllPanels[i].m_Widget.Show(false);
-                        }
+                        panel.gameObject.SetActive(true);
+                        data.m_Widget?.Show(true, bPlayAudio: false);
                     }
                 }
+                else
+                {
+                    panel.m_Fixed = false;
+                    data.m_Widget?.Show(false);
+                }
             }
+            ResetWandPanelRotation();
             m_PanelsCustomized = false;
             AdvancedPanelLayouts.ClearPlayerPrefs();
             // We may not be dismissing a panel here, but we want our panel buttons to refresh, so fake it.

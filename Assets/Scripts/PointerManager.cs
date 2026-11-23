@@ -990,11 +990,11 @@ namespace TiltBrush
             }
         }
 
-        public void AdjustAllPointersBrushSize01(float dt)
+        public void AdjustAllPointersBrushSize01(float dt, bool useExtendedRange = false)
         {
             for (int i = 0; i < m_NumActivePointers; ++i)
             {
-                m_Pointers[i].m_Script.BrushSize01 += dt;
+                m_Pointers[i].m_Script.AdjustBrushSize01(dt, useExtendedRange);
             }
         }
 

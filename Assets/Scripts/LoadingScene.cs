@@ -21,6 +21,11 @@ using UnityEngine.XR.Management;
 #if UNITY_ANDROID
 using UnityEngine.Android;
 #endif
+#if UNITY_ANDROID && !OPEN_BRUSH_VIEWER
+using OpenXR.Extensions;
+using Unity.XR.CompositionLayers;
+using Unity.XR.CompositionLayers.Layers;
+#endif
 
 namespace TiltBrush
 {
@@ -43,7 +48,10 @@ namespace TiltBrush
         private float m_CurrentLoadingPosition;
 #if UNITY_ANDROID && OPEN_BRUSH_SCOPED_STORAGE && !OPEN_BRUSH_VIEWER
         private bool m_OpenedFolderPicker;
+#endif
+#if UNITY_ANDROID && !OPEN_BRUSH_VIEWER
         private XRManagerSettings m_StartupXr;
+        private GameObject m_StartupPassthroughLayers;
 #endif
 #if UNITY_ANDROID
         private bool m_FolderPermissionOverride = false;
@@ -105,8 +113,11 @@ namespace TiltBrush
             }
 #endif
 
+#if UNITY_ANDROID && !OPEN_BRUSH_VIEWER
+            StartQuestLoadingPassthrough();
+#endif
             AsyncOperation asyncLoad = SceneManager.LoadSceneAsync("Main");
-#if UNITY_ANDROID && OPEN_BRUSH_SCOPED_STORAGE && !OPEN_BRUSH_VIEWER
+#if UNITY_ANDROID && !OPEN_BRUSH_VIEWER
             if (m_StartupXr != null)
             {
                 // Keep rendering the loading scene until Main is ready, but do not carry
@@ -118,6 +129,8 @@ namespace TiltBrush
                     yield return null;
                 }
                 yield return new WaitForEndOfFrame();
+                if (m_StartupPassthroughLayers != null)
+                    m_StartupPassthroughLayers.SetActive(false);
                 if (m_StartupXr.isInitializationComplete) m_StartupXr.DeinitializeLoader();
                 m_StartupXr = null;
                 asyncLoad.allowSceneActivation = true;
@@ -157,7 +170,9 @@ namespace TiltBrush
             }
             else AndroidDirectStorage.CancelStartup();
         }
+#endif
 
+#if UNITY_ANDROID && !OPEN_BRUSH_VIEWER
         private void RestoreStartupXr()
         {
             var manager = XRGeneralSettings.Instance?.Manager;
@@ -172,6 +187,35 @@ namespace TiltBrush
             {
                 Debug.LogError($"OBDS_STARTUP XR resume failed: {error}");
             }
+        }
+
+        private void StartQuestLoadingPassthrough()
+        {
+            if (!SystemInfo.deviceModel.Contains("Quest", System.StringComparison.OrdinalIgnoreCase))
+                return;
+
+            RestoreStartupXr();
+            if (m_StartupXr?.activeLoader == null || !VrSdk.IsFbPassthroughAvailable())
+                return;
+
+            m_StartupPassthroughLayers = new GameObject("Loading passthrough");
+            m_StartupPassthroughLayers.SetActive(false);
+            m_StartupPassthroughLayers.transform.SetParent(transform, false);
+
+            var eyeBuffer = m_StartupPassthroughLayers.AddComponent<CompositionLayer>();
+            eyeBuffer.ChangeLayerDataType(new DefaultLayerData { BlendType = BlendType.Premultiply });
+            eyeBuffer.Order = 0;
+
+            var underlay = new GameObject("Loading passthrough underlay");
+            underlay.transform.SetParent(m_StartupPassthroughLayers.transform, false);
+            var layer = underlay.AddComponent<CompositionLayer>();
+            layer.ChangeLayerDataType(new FBPassthroughLayerData());
+            layer.Order = -1;
+
+            m_VrCamera.clearFlags = CameraClearFlags.SolidColor;
+            m_VrCamera.backgroundColor = Color.clear;
+            m_StartupPassthroughLayers.SetActive(true);
+            Debug.Log("[Passthrough] Enabled for the Quest loading scene.");
         }
 #endif
 

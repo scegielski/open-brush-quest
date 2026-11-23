@@ -35,7 +35,7 @@ namespace TiltBrush
         public void HandleResetFirstUse()
         {
             App.Config.SetIsExperimental(false);
-            PlayerPrefs.SetInt(PanelManager.kPlayerPrefAdvancedMode, 0);
+            PlayerPrefs.DeleteKey(PanelManager.kPlayerPrefAdvancedMode);
             PlayerPrefs.DeleteKey(App.kPlayerPrefHasPlayedBefore);
             RestartNotification();
         }

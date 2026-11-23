@@ -79,6 +79,7 @@ namespace TiltBrush
             // and the shared settings of their mirrors are in the trailing symmetry table.
             SymmetryGroup = 1 << 5,
             SymmetryPointerIndex = 1 << 6, // int32, which of the symmetry's pointers drew this
+            SplineKnotCount = 1 << 7, // int32; baked sample index stride is fixed by SplineCurve
             ControlPointColors = 1 << 16, // Variable-length: Color32[] + ColorControlMode; per-point colors
         }
 
@@ -518,6 +519,7 @@ namespace TiltBrush
                 if (stroke.m_BrushScale != 1) { strokeExtensionMask |= StrokeExtension.Scale; }
                 if (stroke.Group != SketchGroupTag.None) { strokeExtensionMask |= StrokeExtension.Group; }
                 strokeExtensionMask |= StrokeExtension.Layer;
+                if (SplineCurve.IsEditable(stroke)) { strokeExtensionMask |= StrokeExtension.SplineKnotCount; }
                 if (stroke.m_OverrideColors != null) { strokeExtensionMask |= StrokeExtension.ControlPointColors; }
                 uint symmetryGroupId = symmetryTable?.GetGroupId(stroke) ?? 0;
                 if (symmetryGroupId != 0)
@@ -556,6 +558,10 @@ namespace TiltBrush
                 if ((uint)(strokeExtensionMask & StrokeExtension.SymmetryPointerIndex) != 0)
                 {
                     writer.Int32(stroke.m_SymmetryPointerIndex);
+                }
+                if ((uint)(strokeExtensionMask & StrokeExtension.SplineKnotCount) != 0)
+                {
+                    writer.Int32(stroke.m_SplineKnotCount);
                 }
                 if ((uint)(strokeExtensionMask & StrokeExtension.ControlPointColors) != 0)
                 {
@@ -666,6 +672,7 @@ namespace TiltBrush
                 if (stroke.m_BrushScale != 1) { strokeExtensionMask |= StrokeExtension.Scale; }
                 if (stroke.Group != SketchGroupTag.None) { strokeExtensionMask |= StrokeExtension.Group; }
                 strokeExtensionMask |= StrokeExtension.Layer;
+                if (SplineCurve.IsEditable(stroke)) { strokeExtensionMask |= StrokeExtension.SplineKnotCount; }
                 if (stroke.m_OverrideColors != null) { strokeExtensionMask |= StrokeExtension.ControlPointColors; }
                 uint symmetryGroupId = symmetryTable?.GetGroupId(stroke) ?? 0;
                 if (symmetryGroupId != 0)
@@ -704,6 +711,10 @@ namespace TiltBrush
                 if ((uint)(strokeExtensionMask & StrokeExtension.SymmetryPointerIndex) != 0)
                 {
                     writer.Int32(stroke.m_SymmetryPointerIndex);
+                }
+                if ((uint)(strokeExtensionMask & StrokeExtension.SplineKnotCount) != 0)
+                {
+                    writer.Int32(stroke.m_SplineKnotCount);
                 }
                 if ((uint)(strokeExtensionMask & StrokeExtension.ControlPointColors) != 0)
                 {
@@ -1002,6 +1013,9 @@ namespace TiltBrush
                         case StrokeExtension.SymmetryPointerIndex:
                             symmetryPointerIndex = reader.Int32();
                             break;
+                        case StrokeExtension.SplineKnotCount:
+                            stroke.m_SplineKnotCount = reader.Int32();
+                            break;
                         default:
                             {
                                 // Skip unknown extension.
@@ -1232,6 +1246,9 @@ namespace TiltBrush
                             break;
                         case StrokeExtension.SymmetryPointerIndex:
                             symmetryPointerIndex = reader.Int32();
+                            break;
+                        case StrokeExtension.SplineKnotCount:
+                            stroke.m_SplineKnotCount = reader.Int32();
                             break;
                         default:
                             {

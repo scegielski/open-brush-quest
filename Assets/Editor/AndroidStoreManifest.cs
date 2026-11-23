@@ -61,6 +61,8 @@ internal static class AndroidStoreManifest
 
         if (!androidXr)
         {
+            // Horizon OS uses this only if the app launches from a passthrough home.
+            SetMetadata(doc, app, "com.oculus.ossplash.background", "passthrough-contextual");
             // Quest only offers tracked hands to apps declaring them. Controllers remain the
             // primary input, so hand tracking must not filter out controller-only devices.
             GetOrCreate(doc, root, "uses-permission", "com.oculus.permission.HAND_TRACKING");

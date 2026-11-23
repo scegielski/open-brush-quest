@@ -207,7 +207,49 @@ namespace TiltBrush
         public float BrushSizeAbsolute
         {
             get { return m_CurrentBrushSize; }
-            set { _SetBrushSizeAbsolute(Mathf.Clamp(value, m_BrushSizeRange.x, m_BrushSizeRange.y)); }
+            set
+            {
+                m_UseExtendedBrushRange = false;
+                SetBrushSizeInCurrentRange(value);
+            }
+        }
+
+        private bool m_UseExtendedBrushRange;
+        private const float kSmallestExtendedBrush = 0.0001f;
+        private const float kLargestExtendedBrush = 512f;
+
+        internal void AdjustBrushSize01(float delta, bool useExtendedRange)
+        {
+            if (delta == 0f || !float.IsFinite(delta))
+                return;
+            if (!useExtendedRange || m_BrushSizeRange.x <= 0f || m_BrushSizeRange.y <= m_BrushSizeRange.x)
+            {
+                BrushSize01 += delta;
+                return;
+            }
+
+            float min = m_BrushSizeRange.x;
+            float max = m_BrushSizeRange.y;
+            float current = Mathf.Max(kSmallestExtendedBrush, BrushSizeAbsolute);
+            const float extensionRate = 2.3f;
+            float t = current < min ? Mathf.Log(current / min) / extensionRate :
+                current > max ? 1f + Mathf.Log(current / max) / extensionRate : BrushSize01;
+            t += delta;
+
+            // Keep the brush's usual response in its nominal range and continue exponentially
+            // beyond either end, so small brushes remain easy to control.
+            float size = t < 0f ? min * Mathf.Exp(t * extensionRate) :
+                t > 1f ? max * Mathf.Exp((t - 1f) * extensionRate) :
+                _ToRadius(Mathf.Lerp(_FromRadius(min), _FromRadius(max), t));
+            m_UseExtendedBrushRange = true;
+            SetBrushSizeInCurrentRange(size);
+        }
+
+        private void SetBrushSizeInCurrentRange(float size)
+        {
+            _SetBrushSizeAbsolute(m_UseExtendedBrushRange
+                ? Mathf.Clamp(size, kSmallestExtendedBrush, kLargestExtendedBrush)
+                : Mathf.Clamp(size, m_BrushSizeRange.x, m_BrushSizeRange.y));
         }
 
         public float MonoscopicLineDepth
@@ -301,7 +343,7 @@ namespace TiltBrush
                 m_SubscribedCanvas.PoseChanged += OnActiveCanvasPoseChanged;
                 if (m_LastUsedBrushSize_CS != null)
                 {
-                    BrushSizeAbsolute = current.Pose.scale * m_LastUsedBrushSize_CS.Value;
+                    SetBrushSizeInCurrentRange(current.Pose.scale * m_LastUsedBrushSize_CS.Value);
                 }
             }
         }
@@ -310,7 +352,7 @@ namespace TiltBrush
         {
             if (m_LastUsedBrushSize_CS != null)
             {
-                BrushSizeAbsolute = current.scale * m_LastUsedBrushSize_CS.Value;
+                SetBrushSizeInCurrentRange(current.scale * m_LastUsedBrushSize_CS.Value);
             }
         }
 
@@ -318,7 +360,8 @@ namespace TiltBrush
         {
             SetBrush(rOther.m_CurrentBrush);
             m_BrushSizeRange = rOther.m_BrushSizeRange; // remove? handled by SetBrush
-            BrushSizeAbsolute = rOther.BrushSizeAbsolute;
+            m_UseExtendedBrushRange = rOther.m_UseExtendedBrushRange;
+            SetBrushSizeInCurrentRange(rOther.BrushSizeAbsolute);
             m_CurrentPressure = rOther.m_CurrentPressure;
             m_AllowPreviewLineTimer = rOther.m_AllowPreviewLineTimer;
             m_AllowPreviewLine = rOther.m_AllowPreviewLine;
@@ -777,6 +820,7 @@ namespace TiltBrush
             if (m_PreviewLine)
             {
                 // TODO: Remove this (and other) calls to DestroyMesh() and do it inside OnDestroy() instead?
+                m_PreviewLine.gameObject.SetActive(false);
                 m_PreviewLine.DestroyMesh();
                 Destroy(m_PreviewLine.gameObject);
                 m_PreviewLine = null;
@@ -914,7 +958,7 @@ namespace TiltBrush
 
                 if (m_LastUsedBrushSize_CS != null)
                 {
-                    BrushSizeAbsolute = Coords.CanvasPose.scale * m_LastUsedBrushSize_CS.Value;
+                    SetBrushSizeInCurrentRange(Coords.CanvasPose.scale * m_LastUsedBrushSize_CS.Value);
                 }
                 else
                 {
@@ -1046,10 +1090,8 @@ namespace TiltBrush
             m_ToolScriptStrokeCreator = null;
             m_ToolScriptPreviewColor = null;
             m_ToolScriptPreviewDirty = false;
-            if (m_PreviewLine != null)
-            {
-                DisablePreviewLine();
-            }
+            DisablePreviewLine();
+            m_PreviewControlPoints?.Clear();
         }
 
         /// Pass a Canvas parent, and a transform in that canvas's space.

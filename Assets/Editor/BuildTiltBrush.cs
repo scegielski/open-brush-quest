@@ -1002,10 +1002,22 @@ static class BuildTiltBrush
         private AndroidSdkVersions m_AndroidMinSdkVersion;
         private bool m_RestoreStoragePermission;
         private bool m_ForceStoragePermission;
+        private readonly bool m_RestoreSplash;
+        private readonly bool m_UnitySplash;
+        private readonly Texture2D m_VrSplash;
 
         public TempSetPlayerSettings(TiltBuildOptions tiltOptions)
         {
             m_Target = tiltOptions.Target;
+            if (m_Target == BuildTarget.Android && tiltOptions.XrSdk == XrSdkMode.OpenXR &&
+                !IsHandheldViewer(m_Target, tiltOptions.XrSdk))
+            {
+                m_RestoreSplash = true;
+                m_UnitySplash = PlayerSettings.SplashScreen.show;
+                m_VrSplash = PlayerSettings.virtualRealitySplashScreen;
+                PlayerSettings.SplashScreen.show = false;
+                PlayerSettings.virtualRealitySplashScreen = null;
+            }
             if (m_Target == BuildTarget.Android)
             {
                 m_AndroidMinSdkVersion = PlayerSettings.Android.minSdkVersion;
@@ -1087,6 +1099,11 @@ static class BuildTiltBrush
 
         public void Dispose()
         {
+            if (m_RestoreSplash)
+            {
+                PlayerSettings.SplashScreen.show = m_UnitySplash;
+                PlayerSettings.virtualRealitySplashScreen = m_VrSplash;
+            }
             PlayerSettings.defaultInterfaceOrientation = m_OrientationSettings;
             PlayerSettings.iOS.targetDevice = m_iOSTargetDevice;
             if (m_RestoreIcons)

@@ -378,6 +378,7 @@ namespace TiltBrush
 
                 m_WandOnRight = value;
                 PlayerPrefs.SetInt(PLAYER_PREF_WAND_ON_RIGHT, WandOnRight ? 1 : 0);
+                PlayerPrefs.Save();
 
                 var vrControllers = App.VrSdk.VrControls;
                 BaseControllerBehavior.SwapBehaviors(vrControllers.Wand, vrControllers.Brush);
@@ -486,8 +487,15 @@ namespace TiltBrush
             // If we're initializing UnityXR, defer this call until our controller type is determined.  XRXR
             if (!App.VrSdk.IsInitializingUnityXR)
             {
-                WandOnRight = (PlayerPrefs.GetInt(PLAYER_PREF_WAND_ON_RIGHT, 0) != 0);
+                RestoreSavedHandedness();
             }
+        }
+
+        internal void RestoreSavedHandedness(bool controllersRecreated = false)
+        {
+            if (controllersRecreated)
+                m_WandOnRight = false; // New controller models start with the wand on the left.
+            WandOnRight = PlayerPrefs.GetInt(PLAYER_PREF_WAND_ON_RIGHT, 0) != 0;
         }
 
         public void ShowControllers(bool show)

@@ -56,6 +56,10 @@ namespace TiltBrush
 
         [SerializeField] private Material m_LazyInputOff;
         [CatalogMaterial] public Material LazyInputOff { get; private set; }
+        [SerializeField] private Material m_SplineCreate;
+        [CatalogMaterial] public Material SplineCreate { get; private set; }
+        [SerializeField] private Material m_SplineEdit;
+        [CatalogMaterial] public Material SplineEdit { get; private set; }
 
 
         [SerializeField] private Material m_RevolverRadius;

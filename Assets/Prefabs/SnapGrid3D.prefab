@@ -45,7 +45,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   material: {fileID: 2100000, guid: a67575884252c4842a3fe31bedc0ca4b, type: 2}
-  color: {r: 0.49056602, g: 0.8503767, b: 1, a: 0}
+  color: {r: 0.49056602, g: 0.8503767, b: 1, a: 1}
   gridCount: {x: 5, y: 5, z: 5}
   gridInterval: 1
   lineLength: 0.3

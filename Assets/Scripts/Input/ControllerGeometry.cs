@@ -1266,6 +1266,16 @@ namespace TiltBrush
         public void TogglePadLazyInputHint(bool lazyInput, bool altMode, bool enabled)
         {
             Material padMat = lazyInput ? altMode ? Materials.LazyInputAltOn : Materials.LazyInputOn : Materials.LazyInputOff;
+            ShowDrawingModeHint(padMat, enabled);
+        }
+
+        public void ShowSplineModeHint(bool editing)
+        {
+            ShowDrawingModeHint(editing ? Materials.SplineEdit : Materials.SplineCreate, true);
+        }
+
+        private void ShowDrawingModeHint(Material padMat, bool enabled)
+        {
             switch (Style)
             {
                 case ControllerStyle.Vive:

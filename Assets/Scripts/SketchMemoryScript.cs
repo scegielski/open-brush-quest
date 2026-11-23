@@ -39,6 +39,7 @@ namespace TiltBrush
         public static SketchMemoryScript m_Instance;
 
         public event Action OperationStackChanged;
+        internal event Action SketchClearing;
         public event Action NetworkOperationStackChanged;
         public Action<BaseCommand> CommandPerformed;
         public Action<BaseCommand> CommandUndo;
@@ -967,6 +968,8 @@ namespace TiltBrush
 
         public void ClearMemory()
         {
+            SketchClearing?.Invoke();
+            PointerManager.m_Instance?.MainPointer?.ClearToolScriptPreview();
             if (m_ScenePlayback != null)
             {
                 // Ensure scene playback completes so that geometry is in state expected by rest of system.

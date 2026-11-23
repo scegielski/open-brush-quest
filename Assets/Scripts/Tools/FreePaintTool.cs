@@ -64,6 +64,7 @@ namespace TiltBrush
             base.EnableTool(bEnable);
             if (!bEnable)
             {
+                SetSplinePreviewVisible(false);
                 PointerManager.m_Instance.EnableLine(false);
                 WidgetManager.m_Instance.ResetActiveStencil();
                 EndBimanualTape();
@@ -116,6 +117,9 @@ namespace TiltBrush
 
             if (m_ExitOnAbortCommand && InputManager.m_Instance.GetCommandDown(InputManager.SketchCommands.Abort))
                 m_RequestExit = true;
+
+            if (UpdateSplineDrawingMode())
+                return;
 
             PositionPointer();
 
@@ -173,15 +177,9 @@ namespace TiltBrush
                         BeginRevolver();
                 }
             }
-            else if (m_brushUndoButtonTapped)
+            else if (m_brushUndoButtonTapped && m_brushTrigger && m_LazyInputActive)
             {
-                if (m_brushTrigger)
-                {
-                    if (m_LazyInputActive)
-                        m_LazyInputTangentMode = !m_LazyInputTangentMode;
-                }
-                else
-                    m_LazyInputActive = !m_LazyInputActive;
+                m_LazyInputTangentMode = !m_LazyInputTangentMode;
             }
 
             PointerManager.m_Instance.EnableLine(m_PaintingActive);
@@ -218,7 +216,13 @@ namespace TiltBrush
                     else
                     {
                         InputManager.Brush.Geometry.ShowBrushSizer();
-                        if (PanelManager.m_Instance.AdvancedModeActive())
+                        if (IsSplineMode && PanelManager.m_Instance.AdvancedModeActive())
+                        {
+                            InputManager.Brush.Geometry.ShowSplineModeHint(m_SplineMode == SplineMode.Edit);
+                            if (m_SplineMode == SplineMode.Edit)
+                                InputManager.Brush.Geometry.ShowPinCushion();
+                        }
+                        else if (PanelManager.m_Instance.AdvancedModeActive())
                         {
                             if (m_BimanualTape)
                                 InputManager.Brush.Geometry.TogglePadRevolverHint(m_RevolverActive, enabled: true);
@@ -306,7 +310,8 @@ namespace TiltBrush
         override public void UpdateSize(float fAdjustAmount)
         {
             float fPrevRatio = GetSize01();
-            PointerManager.m_Instance.AdjustAllPointersBrushSize01(m_AdjustSizeScalar * fAdjustAmount);
+            bool useExtendedRange = App.VrSdk.AnalogIsStick(InputManager.ControllerName.Brush);
+            PointerManager.m_Instance.AdjustAllPointersBrushSize01(m_AdjustSizeScalar * fAdjustAmount, useExtendedRange);
             PointerManager.m_Instance.MarkAllBrushSizeUsed();
             App.Switchboard.TriggerBrushSizeChanged();
             float fCurrentRatio = GetSize01();
@@ -314,7 +319,7 @@ namespace TiltBrush
             float fHalfInterval = m_HapticInterval * 0.5f;
             int iPrevInterval = (int)((fPrevRatio + fHalfInterval) / m_HapticInterval);
             int iCurrentInterval = (int)((fCurrentRatio + fHalfInterval) / m_HapticInterval);
-            if (!App.VrSdk.AnalogIsStick(InputManager.ControllerName.Brush))
+            if (!useExtendedRange)
             {
                 if (iCurrentInterval > iPrevInterval)
                 {

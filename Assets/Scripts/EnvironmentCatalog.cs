@@ -46,11 +46,15 @@ namespace TiltBrush
             get
             {
 #if ZAPBOX_SUPPORTED
-                // Load into passthrough straight away.
                 return m_PassthroughEnvironment;
-#endif
+#else
+                if (Application.platform == RuntimePlatform.Android &&
+                    App.VrSdk.PassthroughMode != PassthroughMode.None)
+                {
+                    return m_PassthroughEnvironment;
+                }
                 return m_DefaultEnvironment;
-
+#endif
             }
         }
 
@@ -67,7 +71,14 @@ namespace TiltBrush
         {
             var newEnvironments = new List<Environment>();
             LoadEnvironmentsInManifest(newEnvironments);
-            newEnvironments.Add(DefaultEnvironment);
+            if (!newEnvironments.Contains(m_DefaultEnvironment))
+            {
+                newEnvironments.Add(m_DefaultEnvironment);
+            }
+            if (!newEnvironments.Contains(DefaultEnvironment))
+            {
+                newEnvironments.Add(DefaultEnvironment);
+            }
 
             m_GuidToEnvironment.Clear();
             foreach (var env in newEnvironments)

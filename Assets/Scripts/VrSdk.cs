@@ -415,7 +415,7 @@ namespace TiltBrush
         /// FBPassthrough.FeatureEnabled dereferences both the settings asset and the feature,
         /// either of which is null when the active loader isn't OpenXR. The feature's own
         /// `enabled` already folds in whether XR_FB_passthrough survived instance creation.
-        private static bool IsFbPassthroughAvailable()
+        internal static bool IsFbPassthroughAvailable()
         {
             OpenXRSettings settings = OpenXRSettings.Instance;
             if (settings == null)
@@ -911,18 +911,7 @@ namespace TiltBrush
                     VrControls.Brush.ControllerGeometry.Style == style;
                 if (style != ControllerStyle.Unset && !styleMatches)
                 {
-                    // Recreated scaffolds start in the default left/right arrangement.
-                    var inputManager = InputManager.m_Instance;
-                    bool wandOnRight = inputManager.WandOnRight;
-                    if (wandOnRight)
-                    {
-                        inputManager.WandOnRight = false;
-                    }
                     UnityXRFinishControllerInit(device);
-                    if (wandOnRight)
-                    {
-                        inputManager.WandOnRight = true;
-                    }
                 }
                 return;
             }
@@ -930,8 +919,14 @@ namespace TiltBrush
 
         private void UnityXRFinishControllerInit(InputDevice device)
         {
-            SetUnityXRControllerStyle(device);
-            InputManager.m_Instance.CreateControllerInfos();
+            var style = GetUnityXRControllerStyle(device);
+            if (style == ControllerStyle.Unset)
+                return;
+
+            SetControllerStyle(style);
+            var inputManager = InputManager.m_Instance;
+            inputManager.CreateControllerInfos();
+            inputManager.RestoreSavedHandedness(controllersRecreated: true);
             PointerManager.m_Instance.RefreshFreePaintPointerAngle();
             PointerManager.m_Instance.RequestPointerRendering(true);
         }
