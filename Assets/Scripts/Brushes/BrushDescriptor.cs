@@ -98,6 +98,8 @@ namespace TiltBrush
         {
             get
             {
+                if (m_LocalizedDescription == null || m_LocalizedDescription.IsEmpty)
+                    return m_DurableName;
                 try
                 {
                     var locString = m_LocalizedDescription.GetLocalizedStringAsync().Result;

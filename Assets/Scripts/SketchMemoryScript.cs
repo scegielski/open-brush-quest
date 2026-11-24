@@ -65,6 +65,12 @@ namespace TiltBrush
             /// This is distinct from Stroke.Group, which is a collection of strokes (of possibly differing
             /// timestamps) that are selected together.
             IsGroupContinue = 1 << 1,
+            TransitionSweepLeft = 1 << 2,
+            TransitionSweepQuarterTurn = 1 << 3,
+            // Transition strokes with this flag store their start heading in the control point rotations.
+            TransitionFixedHeading = 1 << 4,
+            TransitionControllerHeading = 1 << 5,
+            TransitionHeadingOffsets = 1 << 6,
         }
 
         // NOTE: making this generic is way more trouble than it's worth

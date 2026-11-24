@@ -118,6 +118,14 @@ namespace TiltBrush
             if (m_ExitOnAbortCommand && InputManager.m_Instance.GetCommandDown(InputManager.SketchCommands.Abort))
                 m_RequestExit = true;
 
+            if (!m_brushTrigger && !m_wandTrigger && !m_ToolHidden && !m_EatInput &&
+                TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush) &&
+                InputManager.Brush.GetVrInputDown(VrInput.Thumbstick))
+            {
+                TransitionBrush.PreferredQuarterTurns++;
+                InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Brush, 0.055f);
+            }
+
             if (UpdateSplineDrawingMode())
                 return;
 
@@ -307,8 +315,24 @@ namespace TiltBrush
             PointerManager.m_Instance.SetPointerTransform(InputManager.ControllerName.Brush, pos_GS, rot_GS);
         }
 
+        private float m_TransitionRadiusStep;
+
         override public void UpdateSize(float fAdjustAmount)
         {
+            if (TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush))
+            {
+                if (m_TransitionRadiusStep * fAdjustAmount < 0)
+                    m_TransitionRadiusStep = 0;
+                m_TransitionRadiusStep += fAdjustAmount * 12f;
+                int increments = (int)m_TransitionRadiusStep;
+                if (increments != 0)
+                {
+                    m_TransitionRadiusStep -= increments;
+                    PointerManager.m_Instance.SetTransitionRadius(TransitionBrush.RadiusInches + increments);
+                }
+                return;
+            }
+            m_TransitionRadiusStep = 0;
             float fPrevRatio = GetSize01();
             bool useExtendedRange = App.VrSdk.AnalogIsStick(InputManager.ControllerName.Brush);
             PointerManager.m_Instance.AdjustAllPointersBrushSize01(m_AdjustSizeScalar * fAdjustAmount, useExtendedRange);

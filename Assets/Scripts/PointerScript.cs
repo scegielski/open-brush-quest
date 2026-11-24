@@ -68,6 +68,7 @@ namespace TiltBrush
         private float m_GlowPreviewEnabled = 1.0f;
 
         private Vector3 m_InitialBrushSizeScale;
+        private bool m_ShowBrushSizeIndicator;
         private TiltBrush.BrushDescriptor m_CurrentBrush;
         private float m_CurrentBrushSize; // In pointer aka room space
         private Vector2 m_BrushSizeRange;
@@ -76,6 +77,9 @@ namespace TiltBrush
         public ColorOverrideMode CurrentColorOverrideMode { get; set; }
         private BaseBrushScript m_CurrentLine;
         private ParametricStrokeCreator m_CurrentCreator;
+        private CanvasScript m_TransitionStrokeCanvas;
+        private int m_TransitionStartFrame;
+        private Quaternion m_TransitionStartOrientation;
         private float m_ParametricCreatorBackupStrokeSize; // In pointer aka room space
         private ToolScriptStrokeCreator m_ToolScriptStrokeCreator;
         private bool m_ToolScriptPreviewDirty;
@@ -302,6 +306,7 @@ namespace TiltBrush
             if (m_BrushSizeIndicator)
             {
                 m_InitialBrushSizeScale = m_BrushSizeIndicator.localScale;
+                m_ShowBrushSizeIndicator = m_BrushSizeIndicator.gameObject.activeSelf;
             }
             m_CurrentBrushSize = 1.0f;
             m_BrushSizeRange.x = 1.0f;
@@ -341,7 +346,11 @@ namespace TiltBrush
             if (m_SubscribedCanvas != null)
             {
                 m_SubscribedCanvas.PoseChanged += OnActiveCanvasPoseChanged;
-                if (m_LastUsedBrushSize_CS != null)
+                if (TransitionBrush.IsTransition(m_CurrentBrush))
+                {
+                    SetTransitionRadiusForCanvas(current.Pose.scale);
+                }
+                else if (m_LastUsedBrushSize_CS != null)
                 {
                     SetBrushSizeInCurrentRange(current.Pose.scale * m_LastUsedBrushSize_CS.Value);
                 }
@@ -350,7 +359,11 @@ namespace TiltBrush
 
         void OnActiveCanvasPoseChanged(TrTransform prev, TrTransform current)
         {
-            if (m_LastUsedBrushSize_CS != null)
+            if (TransitionBrush.IsTransition(m_CurrentBrush))
+            {
+                SetTransitionRadiusForCanvas(current.scale);
+            }
+            else if (m_LastUsedBrushSize_CS != null)
             {
                 SetBrushSizeInCurrentRange(current.scale * m_LastUsedBrushSize_CS.Value);
             }
@@ -361,7 +374,10 @@ namespace TiltBrush
             SetBrush(rOther.m_CurrentBrush);
             m_BrushSizeRange = rOther.m_BrushSizeRange; // remove? handled by SetBrush
             m_UseExtendedBrushRange = rOther.m_UseExtendedBrushRange;
-            SetBrushSizeInCurrentRange(rOther.BrushSizeAbsolute);
+            if (TransitionBrush.IsTransition(m_CurrentBrush))
+                _SetBrushSizeAbsolute(rOther.BrushSizeAbsolute);
+            else
+                SetBrushSizeInCurrentRange(rOther.BrushSizeAbsolute);
             m_CurrentPressure = rOther.m_CurrentPressure;
             m_AllowPreviewLineTimer = rOther.m_AllowPreviewLineTimer;
             m_AllowPreviewLine = rOther.m_AllowPreviewLine;
@@ -390,7 +406,13 @@ namespace TiltBrush
 
         public void MarkBrushSizeUsed()
         {
-            m_LastUsedBrushSize_CS = (1 / App.ActiveCanvas.Pose.scale) * BrushSizeAbsolute;
+            if (!TransitionBrush.IsTransition(m_CurrentBrush))
+                m_LastUsedBrushSize_CS = (1 / App.ActiveCanvas.Pose.scale) * BrushSizeAbsolute;
+        }
+
+        internal void SetTransitionRadiusForCanvas(float canvasScale)
+        {
+            _SetBrushSizeAbsolute(TransitionBrush.RadiusInches * TransitionBrush.UnitsPerInch * canvasScale);
         }
 
         void Update()
@@ -618,6 +640,13 @@ namespace TiltBrush
         public void UpdateLineFromObject()
         {
             var xf_LS = GetTransformForLine(m_CurrentLine.transform, Coords.AsRoom[transform]);
+            var transition = m_CurrentLine as TransitionBrush;
+            bool tracksController = transition != null && transition.TrackControllerForNewStroke;
+            if (tracksController && m_TransitionStartFrame != Time.frameCount)
+            {
+                transition.CurrentControllerOrientation = PointerManager.m_Instance.GetTransitionStrokeOrientation(
+                    this, m_TransitionStrokeCanvas, xf_LS.rotation, starting: false);
+            }
             if (PointerManager.m_Instance.CurrentSymmetryMode ==
                 PointerManager.SymmetryMode.ScriptedSymmetryMode)
             {
@@ -647,6 +676,17 @@ namespace TiltBrush
 
                 m_ControlPoints.Clear();
                 m_ControlPoints.AddRange(m_CurrentCreator.GetPoints(xf_LS));
+                if (tracksController)
+                {
+                    int last = Mathf.Max(1, m_ControlPoints.Count - 1);
+                    for (int i = 0; i < m_ControlPoints.Count; i++)
+                    {
+                        var point = m_ControlPoints[i];
+                        point.m_Orient = Quaternion.Slerp(m_TransitionStartOrientation,
+                            transition.CurrentControllerOrientation, (float)i / last);
+                        m_ControlPoints[i] = point;
+                    }
+                }
                 float scale = xf_LS.scale;
                 m_CurrentLine.ResetBrushForPreview(
                     TrTransform.TRS(m_ControlPoints[0].m_Pos, m_ControlPoints[0].m_Orient, scale));
@@ -665,6 +705,8 @@ namespace TiltBrush
                 return;
             }
 
+            if (tracksController)
+                xf_LS.rotation = transition.CurrentControllerOrientation;
             Color32? colorOverride = CurrentColorOverrideMode == ColorOverrideMode.None ? null : CurrentColorOverride;
             bool bQuadCreated = m_CurrentLine.UpdatePosition_LS(xf_LS, m_CurrentPressure, colorOverride);
 
@@ -956,7 +998,11 @@ namespace TiltBrush
             {
                 m_BrushSizeRange = rBrush.m_BrushSizeRange;
 
-                if (m_LastUsedBrushSize_CS != null)
+                if (TransitionBrush.IsTransition(rBrush))
+                {
+                    SetTransitionRadiusForCanvas(Coords.CanvasPose.scale);
+                }
+                else if (m_LastUsedBrushSize_CS != null)
                 {
                     SetBrushSizeInCurrentRange(Coords.CanvasPose.scale * m_LastUsedBrushSize_CS.Value);
                 }
@@ -964,7 +1010,8 @@ namespace TiltBrush
                 {
                     BrushSize01 = 0.5f;
                 }
-                MarkBrushSizeUsed();
+                if (!TransitionBrush.IsTransition(rBrush))
+                    m_LastUsedBrushSize_CS = (1 / App.ActiveCanvas.Pose.scale) * BrushSizeAbsolute;
 
                 DisablePreviewLine();
                 SetTintableIntensity(rBrush);
@@ -972,13 +1019,21 @@ namespace TiltBrush
                 OnBrushChange(rBrush);
             }
 
-            m_CurrentBrush = rBrush;
+            if (m_CurrentBrush != rBrush)
+            {
+                m_CurrentBrush = rBrush;
+                ShowSizeIndicator(m_ShowBrushSizeIndicator);
+                if (m_BrushPressureIndicator)
+                    m_BrushPressureIndicator.gameObject.SetActive(!TransitionBrush.IsTransition(rBrush));
+            }
             ResetAudio();
         }
 
         public void ShowSizeIndicator(bool show)
         {
-            m_BrushSizeIndicator.gameObject.SetActive(show);
+            m_ShowBrushSizeIndicator = show;
+            if (m_BrushSizeIndicator)
+                m_BrushSizeIndicator.gameObject.SetActive(show && !TransitionBrush.IsTransition(m_CurrentBrush));
         }
 
         void _SetBrushSizeAbsolute(float value)
@@ -1013,7 +1068,8 @@ namespace TiltBrush
         {
             PointerManager.ControlPoint rControlPoint;
             rControlPoint.m_Pos = lastSpawnXf_LS.translation;
-            rControlPoint.m_Orient = lastSpawnXf_LS.rotation;
+            rControlPoint.m_Orient = m_CurrentLine is TransitionBrush { TrackControllerForNewStroke: true } transition
+                ? transition.CurrentControllerOrientation : lastSpawnXf_LS.rotation;
             rControlPoint.m_Pressure = m_CurrentPressure;
             rControlPoint.m_TimestampMs = (uint)(App.Instance.CurrentSketchTime * 1000);
 
@@ -1097,7 +1153,8 @@ namespace TiltBrush
         /// Pass a Canvas parent, and a transform in that canvas's space.
         /// If overrideDesc passed, use that for the visuals -- m_CurrentBrush does not change.
         public void CreateNewLine(CanvasScript canvas, TrTransform xf_CS,
-                                  ParametricStrokeCreator creator, BrushDescriptor overrideDesc = null)
+                                  ParametricStrokeCreator creator, BrushDescriptor overrideDesc = null,
+                                  bool trackTransitionController = false)
         {
             // If straightedge is enabled, we may have a minimum size requirement.
             // Initialize parametric stroke creator for our type of straightedge.
@@ -1112,18 +1169,35 @@ namespace TiltBrush
                 m_CurrentBrushSize = m_CurrentCreator.ProcessBrushSize(m_CurrentBrushSize);
             }
 
-            m_LastUsedBrushSize_CS = (1 / Coords.CanvasPose.scale) * BrushSizeAbsolute;
+            if (!TransitionBrush.IsTransition(desc))
+                m_LastUsedBrushSize_CS = (1 / Coords.CanvasPose.scale) * BrushSizeAbsolute;
             m_LineLength_CS = 0.0f;
 
             float jitteredBrushSize = m_CurrentBrushSize;
-            if (PointerManager.m_Instance.JitterEnabled)
+            if (PointerManager.m_Instance.JitterEnabled && !TransitionBrush.IsTransition(desc))
             {
                 jitteredBrushSize = PointerManager.m_Instance.GenerateJitteredSize(desc, m_CurrentBrushSize);
+            }
+
+            bool tracksController = trackTransitionController && TransitionBrush.IsTransition(desc);
+            m_TransitionStrokeCanvas = tracksController ? canvas : null;
+            if (tracksController)
+            {
+                m_TransitionStartFrame = Time.frameCount;
+                m_TransitionStartOrientation = PointerManager.m_Instance.GetTransitionStrokeOrientation(
+                    this, canvas, xf_CS.rotation, starting: true);
+                xf_CS.rotation = m_TransitionStartOrientation;
             }
 
             m_CurrentLine = BaseBrushScript.Create(
                 canvas.transform, xf_CS,
                 desc, m_CurrentColor, jitteredBrushSize);
+            if (m_CurrentLine is TransitionBrush transition)
+            {
+                transition.NewStrokeQuarterTurns = TransitionBrush.PreferredQuarterTurns;
+                transition.TrackControllerForNewStroke = tracksController;
+                transition.CurrentControllerOrientation = xf_CS.rotation;
+            }
         }
 
         /// Like BeginLineFromMemory + EndLineFromMemory
@@ -1190,6 +1264,12 @@ namespace TiltBrush
             if (rMemoryObjectForPlayback != null)
             {
                 Debug.Assert(strokeFlags == SketchMemoryScript.StrokeFlags.None);
+            }
+            else if (m_CurrentLine is TransitionBrush transition)
+            {
+                strokeFlags |= TransitionBrush.FlagsForQuarterTurns(transition.QuarterTurns);
+                if (transition.TrackControllerForNewStroke)
+                    strokeFlags |= SketchMemoryScript.StrokeFlags.TransitionControllerHeading;
             }
 
             if (ApiManager.Instance.HasOutgoingListeners)

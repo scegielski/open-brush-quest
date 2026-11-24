@@ -32,25 +32,25 @@ namespace TiltBrush
             return res;
         }
 
-        public static Vector3 SnapToGrid(Vector3 position)
+        internal static Vector3 RoundGridPosition(Vector3 point, float spacing, bool x, bool y, bool z)
         {
+            return new Vector3(
+                x ? Mathf.Round(point.x / spacing) * spacing : point.x,
+                y ? Mathf.Round(point.y / spacing) * spacing : point.y,
+                z ? Mathf.Round(point.z / spacing) * spacing : point.z);
+        }
 
+        public static Vector3 SnapToGrid(Vector3 position, bool allowAxisSlide = true)
+        {
             float gridSubdivision = SelectionManager.m_Instance.SnappingGridSize;
-
-            Vector3 localCanvasPos = App.Scene.MainCanvas.transform.worldToLocalMatrix.MultiplyPoint3x4(position);
-
-            Vector3 roundedCanvasPos =
-                new Vector3(
-                    Mathf.Round(localCanvasPos.x / gridSubdivision) * gridSubdivision,
-                    Mathf.Round(localCanvasPos.y / gridSubdivision) * gridSubdivision,
-                    Mathf.Round(localCanvasPos.z / gridSubdivision) * gridSubdivision
-                );
-
-            roundedCanvasPos = new Vector3(
-                SelectionManager.m_Instance.m_EnableSnapTranslationX ? roundedCanvasPos.x : localCanvasPos.x,
-                SelectionManager.m_Instance.m_EnableSnapTranslationY ? roundedCanvasPos.y : localCanvasPos.y,
-                SelectionManager.m_Instance.m_EnableSnapTranslationZ ? roundedCanvasPos.z : localCanvasPos.z
-            );
+            var selection = SelectionManager.m_Instance;
+            Transform grid = App.Scene.MainCanvas.transform;
+            Vector3 localCanvasPos = grid.InverseTransformPoint(position);
+            Vector3 roundedCanvasPos = RoundGridPosition(localCanvasPos, gridSubdivision,
+                selection.m_EnableSnapTranslationX, selection.m_EnableSnapTranslationY,
+                selection.m_EnableSnapTranslationZ);
+            if (!allowAxisSlide)
+                return grid.TransformPoint(roundedCanvasPos);
 
             Vector3 offset = new Vector3(
                 Mathf.Abs(roundedCanvasPos.x - localCanvasPos.x),
@@ -86,7 +86,7 @@ namespace TiltBrush
                 }
             }
 
-            return App.Scene.MainCanvas.transform.localToWorldMatrix.MultiplyPoint3x4(snappedPos);
+            return grid.TransformPoint(snappedPos);
         }
 
     }

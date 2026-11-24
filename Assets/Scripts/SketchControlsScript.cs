@@ -1229,7 +1229,9 @@ namespace TiltBrush
 
                         bool hasSplinePreview = m_SketchSurfacePanel.ActiveTool is FreePaintTool freePaint &&
                             freePaint.UsesSplinePreview;
-                        PointerManager.m_Instance.AllowPointerPreviewLine(IsFreepaintToolReady() && !hasSplinePreview);
+                        bool isTransition = TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush);
+                        PointerManager.m_Instance.AllowPointerPreviewLine(
+                            IsFreepaintToolReady() && !hasSplinePreview && !isTransition);
                         //keep transform gizmo at sketch surface pos
                         m_TransformGizmo.transform.position = m_SketchSurface.transform.position;
                         bool bGizmoActive = m_InputStateConfigs[(int)m_CurrentInputState].m_ShowGizmo && m_SketchSurfacePanel.ShouldShowTransformGizmo();

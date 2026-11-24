@@ -13,6 +13,9 @@ namespace TiltBrush
         internal const int SamplesPerSegment = 32;
         internal const int MaxKnots = 128;
 
+        internal static Quaternion RotateGrabbedKnot(Quaternion knotAtGrab, Quaternion controllerAtGrab,
+            Quaternion currentController) => currentController * Quaternion.Inverse(controllerAtGrab) * knotAtGrab;
+
         internal static bool IsEditable(StrokeData stroke)
         {
             int count = stroke.m_SplineKnotCount;

@@ -14,6 +14,30 @@ namespace TiltBrush
 {
     public class TestSplineCurve
     {
+        [Test]
+        public void GrabbedKnotKeepsItsOrientationUntilTheControllerTurns()
+        {
+            Quaternion knot = Quaternion.Euler(15f, 35f, 25f);
+            Quaternion controller = Quaternion.Euler(20f, 55f, 10f);
+
+            Quaternion initial = SplineCurve.RotateGrabbedKnot(knot, controller, controller);
+            Assert.That(Quaternion.Angle(initial, knot), Is.LessThan(0.1f));
+
+            Quaternion turn = Quaternion.Euler(0f, 75f, 0f);
+            Quaternion edited = SplineCurve.RotateGrabbedKnot(knot, controller, turn * controller);
+            Assert.That(Quaternion.Angle(edited, turn * knot), Is.LessThan(0.1f));
+        }
+
+        [Test]
+        public void GridSnapsEachEnabledAxisAndPreservesDisabledAxes()
+        {
+            var point = new Vector3(1.48f, 2.82f, -1.48f);
+            Assert.That(FreePaintTool.RoundGridPosition(point, 1f, true, false, true),
+                Is.EqualTo(new Vector3(1f, 2.82f, -1f)));
+            Assert.That(FreePaintTool.RoundGridPosition(point, 0.5f, true, true, true),
+                Is.EqualTo(new Vector3(1.5f, 3f, -1.5f)));
+        }
+
         private readonly List<TrTransform> m_Samples = new();
 
         [Test]

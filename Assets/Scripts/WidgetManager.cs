@@ -1176,6 +1176,14 @@ namespace TiltBrush
             return stencilWasUsed;
         }
 
+        internal void ProjectOntoActiveStencil(ref Vector3 position, ref Quaternion rotation)
+        {
+            if (m_ActiveStencil == null)
+                return;
+            m_ActiveStencil.FindClosestPointOnSurface(position, out position, out var normal);
+            rotation = Quaternion.LookRotation(normal, rotation * Vector3.up);
+        }
+
         bool FindClosestPointOnCollider(
             Ray rRay, Collider collider, out RaycastHit rHitInfo, float fDist)
         {

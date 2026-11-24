@@ -27,6 +27,8 @@ namespace TiltBrush
         private TrTransform[] m_EndSplinePoints;
         private List<Color32?> m_StartColors;
         private List<Color32?> m_EndColors;
+        private SketchMemoryScript.StrokeFlags m_StartFlags;
+        private SketchMemoryScript.StrokeFlags m_EndFlags;
 
         public ModifyStrokePointsCommand(Stroke stroke, PointerManager.ControlPoint[] newControlPoints, BaseCommand parent = null) : base(parent)
         {
@@ -40,11 +42,14 @@ namespace TiltBrush
         public override bool NeedsSave { get { return true; } }
 
         internal ModifyStrokePointsCommand(Stroke stroke, PointerManager.ControlPoint[] newControlPoints,
-            TrTransform[] splinePoints, List<Color32?> colors) : this(stroke, newControlPoints)
+            TrTransform[] splinePoints, List<Color32?> colors, SketchMemoryScript.StrokeFlags flags)
+            : this(stroke, newControlPoints)
         {
             m_EndSplinePoints = splinePoints;
             m_StartColors = stroke.m_OverrideColors;
             m_EndColors = colors;
+            m_StartFlags = stroke.m_Flags;
+            m_EndFlags = flags;
         }
 
         public void UpdateEndPoints(PointerManager.ControlPoint[] newControlPoints)
@@ -79,6 +84,7 @@ namespace TiltBrush
             {
                 ApplySplineMetadata(m_EndSplinePoints.Length, m_EndSplinePoints);
                 ApplySplineColors(m_EndColors, m_EndPoints.Length);
+                m_TargetStroke.m_Flags = m_EndFlags;
             }
             else if (m_StartSplinePoints != null)
             {
@@ -93,7 +99,10 @@ namespace TiltBrush
             if (m_EndSplinePoints != null || m_StartSplinePoints != null)
                 ApplySplineMetadata(m_StartKnotCount, m_StartSplinePoints);
             if (m_EndSplinePoints != null)
+            {
                 ApplySplineColors(m_StartColors, m_StartPoints.Length);
+                m_TargetStroke.m_Flags = m_StartFlags;
+            }
             ApplyNewPositionsToStroke(m_StartPoints);
         }
     }

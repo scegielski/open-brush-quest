@@ -1100,6 +1100,7 @@ namespace TiltBrush
         {
             Debug.Log($"Brush position: {ApiManager.Instance.BrushPosition}");
             Debug.Log($"Brush rotation: {ApiManager.Instance.BrushRotation.eulerAngles}");
+            Debug.Log($"[TransitionPreview] {PointerManager.m_Instance.DescribeTransitionPreview()}");
         }
 
         private static ReferenceImage _LoadReferenceImage(string location)

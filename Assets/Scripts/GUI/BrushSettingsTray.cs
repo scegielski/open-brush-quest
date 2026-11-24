@@ -33,6 +33,11 @@ namespace TiltBrush
         {
             base.OnDestroy();
             App.Switchboard.BrushSizeChanged -= UpdateSliderToMatchCurrentSize;
+            if (BrushController.m_Instance != null)
+            {
+                BrushController.m_Instance.BrushChanged -= OnBrushChanged;
+                BrushController.m_Instance.BrushSetToDefault -= DetectSupportedDevices;
+            }
         }
 
         private void DetectSupportedDevices()
@@ -43,9 +48,9 @@ namespace TiltBrush
             // Show the brush size panel when either:
             // 1. The Logitech VR stylus is active, or
             // 2. The Brush/right side is currently controlled by Android XR hand tracking.
-            bool needsBrushSizeUI =
-                VrStylusHandler.m_Instance?.CurrentState?.isActive == true ||
-                AndroidXRHandBridge.UseHand(true);
+            bool transition = TransitionBrush.IsTransition(PointerManager.m_Instance?.MainPointer?.CurrentBrush);
+            bool needsBrushSizeUI = !transition &&
+                (VrStylusHandler.m_Instance?.CurrentState?.isActive == true || AndroidXRHandBridge.UseHand(true));
 
             bool wasShowing = m_AnimateIn;
 
@@ -67,10 +72,14 @@ namespace TiltBrush
         protected override void Start()
         {
             base.Start();
+            BrushController.m_Instance.BrushChanged += OnBrushChanged;
+            BrushController.m_Instance.BrushSetToDefault += DetectSupportedDevices;
 
             // Check supported input devices every few seconds.
             InvokeRepeating(nameof(DetectSupportedDevices), 0.0f, 3);
         }
+
+        private void OnBrushChanged(BrushDescriptor brush) => DetectSupportedDevices();
 
         protected override void OnToolChanged()
         {

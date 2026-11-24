@@ -399,19 +399,22 @@ namespace TiltBrush
         // TODO: Possibly could optimize this in C++ for 11.5% of time in selection.
         private void LeftTransformControlPoints(TrTransform leftTransform, bool absoluteScale = false)
         {
+            bool rotatePoints = !TransitionBrush.HasHeadingOffsets(this);
             for (int i = 0; i < m_ControlPoints.Length; i++)
             {
                 var point = m_ControlPoints[i];
                 var xfOld = TrTransform.TR(point.m_Pos, point.m_Orient);
                 var xfNew = leftTransform * xfOld;
                 point.m_Pos = xfNew.translation;
-                point.m_Orient = xfNew.rotation;
+                if (rotatePoints)
+                    point.m_Orient = xfNew.rotation;
                 m_ControlPoints[i] = point;
             }
 
             if (m_SplineControlPoints != null)
                 m_SplineControlPoints = Array.ConvertAll(m_SplineControlPoints, point =>
-                    TrTransform.TR(leftTransform * point.translation, leftTransform.rotation * point.rotation));
+                    TrTransform.TR(leftTransform * point.translation,
+                        rotatePoints ? leftTransform.rotation * point.rotation : point.rotation));
 
             m_BrushScale *= absoluteScale
                 ? Mathf.Abs(leftTransform.scale)
@@ -421,17 +424,20 @@ namespace TiltBrush
 
         private void LeftTransformControlPoints(Matrix4x4 leftTransform)
         {
+            bool rotatePoints = !TransitionBrush.HasHeadingOffsets(this);
             for (int i = 0; i < m_ControlPoints.Length; i++)
             {
                 var point = m_ControlPoints[i];
                 point.m_Pos = leftTransform.MultiplyPoint3x4(point.m_Pos);
-                point.m_Orient = leftTransform.rotation * point.m_Orient;
+                if (rotatePoints)
+                    point.m_Orient = leftTransform.rotation * point.m_Orient;
                 m_ControlPoints[i] = point;
             }
 
             if (m_SplineControlPoints != null)
                 m_SplineControlPoints = Array.ConvertAll(m_SplineControlPoints, point =>
-                    TrTransform.TR(leftTransform.MultiplyPoint3x4(point.translation), leftTransform.rotation * point.rotation));
+                    TrTransform.TR(leftTransform.MultiplyPoint3x4(point.translation),
+                        rotatePoints ? leftTransform.rotation * point.rotation : point.rotation));
 
             m_BrushScale *= Mathf.Abs(leftTransform.lossyScale.x);
             InvalidateCopy();

@@ -226,6 +226,7 @@ namespace TiltBrush
 
         private bool m_PointersRenderingRequested;
         private bool m_PointersRenderingActive;
+        private FreePaintTool m_TransitionPreviewTool;
         private bool m_PointersHideOnControllerLoss;
 
         private float m_FreePaintPointerAngle;
@@ -913,6 +914,32 @@ namespace TiltBrush
             m_PointersRenderingRequested = bEnable;
         }
 
+        private void LateUpdate()
+        {
+            if (m_TransitionPreviewTool == null && SketchSurfacePanel.m_Instance != null &&
+                App.Instance != null && App.Instance.IsInStateThatAllowsPainting())
+                m_TransitionPreviewTool = SketchSurfacePanel.m_Instance
+                    .GetToolOfType(BaseTool.ToolType.FreePaintTool) as FreePaintTool;
+
+            if (m_TransitionPreviewTool != null)
+                m_TransitionPreviewTool.UpdateTransitionPreview(MainPointer, transform);
+        }
+
+        internal string DescribeTransitionPreview()
+        {
+            return m_TransitionPreviewTool != null ? m_TransitionPreviewTool.DescribeTransitionPreview() :
+                "Drawing controller preview has not initialized";
+        }
+
+        internal Quaternion GetTransitionStrokeOrientation(PointerScript pointer, CanvasScript canvas,
+            Quaternion fallback, bool starting)
+        {
+            if (pointer == MainPointer && m_TransitionPreviewTool != null)
+                return starting ? m_TransitionPreviewTool.CaptureTransitionOrientation(canvas, fallback) :
+                    m_TransitionPreviewTool.SampleTransitionOrientation(canvas, fallback);
+            return TransitionBrush.HorizontalOrientation(fallback);
+        }
+
         public void SetPointersAudioForPlayback()
         {
             foreach (PointerData rData in m_Pointers)
@@ -980,6 +1007,18 @@ namespace TiltBrush
             {
                 m_Pointers[i].m_Script.MarkBrushSizeUsed();
             }
+        }
+
+        internal void SetTransitionRadius(int inches)
+        {
+            TransitionBrush.RadiusInches = inches;
+            for (int i = 0; i < m_NumActivePointers; i++)
+            {
+                var pointer = m_Pointers[i].m_Script;
+                if (TransitionBrush.IsTransition(pointer.CurrentBrush))
+                    pointer.SetTransitionRadiusForCanvas(App.ActiveCanvas.Pose.scale);
+            }
+            App.Switchboard.TriggerBrushSizeChanged();
         }
 
         public void SetAllPointersBrushSize01(float t)
@@ -1326,7 +1365,8 @@ namespace TiltBrush
                 canvas,
                 xfPointer_CS,
                 currentCreator,
-                m_StraightEdgeProxyActive ? m_StraightEdgeProxyBrush : null);
+                m_StraightEdgeProxyActive ? m_StraightEdgeProxyBrush : null,
+                trackTransitionController: true);
             script.SetControlPoint(xfPointer_CS, isKeeper: true);
         }
 

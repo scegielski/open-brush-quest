@@ -185,6 +185,9 @@ namespace TiltBrush
             m_GuiBrushList.Clear();
             foreach (var brush in m_GuidToBrush.Values)
             {
+                if (brush.m_DurableName != "Icing" && brush.m_DurableName != "DuctTape" &&
+                    !TransitionBrush.IsTransition(brush))
+                    continue;
                 // Some brushes are hardcoded as hidden
                 if (brush.m_HiddenInGui) continue;
                 // Always include if experimental mode is on
