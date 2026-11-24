@@ -49,6 +49,7 @@ namespace TiltBrush
         private bool m_SplineModePressArmed;
         private Stroke m_EditableSpline;
         private StrokeData m_SplineHeadingEditData;
+        private BrushDescriptor m_SplineEditBrush;
         private bool m_EditingTransitionSpline;
         private PointerManager.ControlPoint[] m_LastAppliedSplinePoints;
         private TrTransform[] m_LastAppliedSplineControls;
@@ -79,8 +80,8 @@ namespace TiltBrush
             : TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush);
         private bool SplineUsesHeadingOffsets => m_EditingTransitionSpline &&
             TransitionBrush.HasHeadingOffsets(SplineEditData);
-        private bool SplineHasDeck => m_EditableSpline != null ? m_EditingTransitionSpline :
-            TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush);
+        private bool SplineHasDeck => TransitionBrush.HasDeck(m_EditableSpline != null
+            ? m_SplineEditBrush : PointerManager.m_Instance.MainPointer.CurrentBrush);
         private bool IsDeckDepthAction => m_SplineMode == SplineMode.Edit &&
             m_SplineAction == SplineAction.DeckDepth;
 
@@ -718,7 +719,7 @@ namespace TiltBrush
                 if (brush is TransitionBrush newTransition)
                 {
                     newTransition.NewStrokeQuarterTurns = turns;
-                    newTransition.TrackControllerForNewStroke = true;
+                    newTransition.TrackControllerForNewStroke = isTransition;
                 }
                 brush.gameObject.name = "Draft spline brush";
                 brush.RandomSeed = 0;
@@ -728,13 +729,14 @@ namespace TiltBrush
             {
                 brush.ResetBrushForPreview(start);
             }
-            if (brush is TransitionBrush previewTransition)
+            bool hasDeck = TransitionBrush.HasDeck(descriptor);
+            if (hasDeck && brush is TransitionBrush previewTransition)
                 previewTransition.PreviewStartDeckPressure = SplineDeckPressure(0);
             for (int i = 0; i < m_SplineStrokePoints.Count && !brush.IsOutOfVerts(); i++)
             {
                 var point = m_SplineStrokePoints[i];
                 brush.UpdatePosition_LS(TrTransform.TR(point.m_Pos, point.m_Orient),
-                    isTransition ? SplineDeckPressure(i) : point.m_Pressure);
+                    hasDeck ? SplineDeckPressure(i) : point.m_Pressure);
             }
             brush.ApplyChangesToVisuals();
         }
@@ -809,8 +811,9 @@ namespace TiltBrush
             m_SplineTopologyIndex = -1;
             m_SavedSplinePreviewBrush = null;
             m_SplineHeadingEditData = null;
-            m_EditingTransitionSpline = m_EditableSpline != null &&
-                TransitionBrush.IsTransition(BrushCatalog.m_Instance.GetBrush(m_EditableSpline.m_BrushGuid));
+            m_SplineEditBrush = m_EditableSpline == null ? null :
+                BrushCatalog.m_Instance.GetBrush(m_EditableSpline.m_BrushGuid);
+            m_EditingTransitionSpline = TransitionBrush.IsTransition(m_SplineEditBrush);
             m_SplineDraftBeforeEdit = null;
             m_SplineDraftUndo.Clear();
             m_SplineDraftRedo.Clear();
@@ -823,7 +826,7 @@ namespace TiltBrush
             m_SplineClosed = m_EditableSpline != null && SplineCurve.IsClosed(m_EditableSpline);
             if (m_EditableSpline != null)
             {
-                bool variableDeck = m_EditingTransitionSpline && TransitionBrush.HasVariableDeck(m_EditableSpline);
+                bool variableDeck = SplineHasDeck && TransitionBrush.HasVariableDeck(m_EditableSpline);
                 for (int i = 0; i < m_EditableSpline.m_SplineKnotCount; i++)
                 {
                     var knot = SplineCurve.GetAuthoredPoint(m_EditableSpline, i);
@@ -879,7 +882,8 @@ namespace TiltBrush
                 brush.ResetBrushForPreview(start);
             }
             brush.SetStrokeData(SplineEditData);
-            if (brush is TransitionBrush transition)
+            bool hasDeck = SplineHasDeck;
+            if (hasDeck && brush is TransitionBrush transition)
                 transition.PreviewStartDeckPressure = SplineDeckPressure(0);
 
             for (int i = 0; i < m_SplineStrokePoints.Count && !brush.IsOutOfVerts(); i++)
@@ -887,7 +891,7 @@ namespace TiltBrush
                 var point = m_SplineStrokePoints[i];
                 int sourceIndex = GetSavedSplineSampleIndex(i);
                 brush.UpdatePosition_LS(TrTransform.TRS(point.m_Pos, point.m_Orient, stroke.m_BrushScale),
-                    m_EditingTransitionSpline ? SplineDeckPressure(i) : m_LastAppliedSplinePoints[sourceIndex].m_Pressure,
+                    hasDeck ? SplineDeckPressure(i) : m_LastAppliedSplinePoints[sourceIndex].m_Pressure,
                     stroke.GetColor(sourceIndex));
             }
             brush.ApplyChangesToVisuals();
@@ -947,6 +951,7 @@ namespace TiltBrush
             var points = new PointerManager.ControlPoint[m_SplineStrokePoints.Count];
             Quaternion? transitionOrientation = TransitionBrush.GetSavedOrientation(SplineEditData);
             var originalColors = m_EditableSpline.m_OverrideColors;
+            bool hasDeck = SplineHasDeck;
             bool resize = points.Length != m_LastAppliedSplinePoints.Length;
             var colors = resize && originalColors != null ? new List<Color32?>(points.Length) : originalColors;
             for (int i = 0; i < points.Length; i++)
@@ -955,7 +960,7 @@ namespace TiltBrush
                 points[i] = m_LastAppliedSplinePoints[sourceIndex];
                 points[i].m_Pos = m_SplineStrokePoints[i].m_Pos;
                 points[i].m_Orient = transitionOrientation ?? m_SplineStrokePoints[i].m_Orient;
-                if (m_EditingTransitionSpline)
+                if (hasDeck)
                     points[i].m_Pressure = SplineDeckPressure(i);
                 if (resize && colors != null)
                     colors.Add(sourceIndex < originalColors.Count ? originalColors[sourceIndex] : null);
@@ -964,7 +969,7 @@ namespace TiltBrush
             if (m_EditableSpline.m_Object != null)
                 m_EditableSpline.m_Object.SetActive(false);
             var flags = SplineEditData.m_Flags;
-            if (m_EditingTransitionSpline)
+            if (hasDeck)
                 flags |= SketchMemoryScript.StrokeFlags.TransitionVariableDeck;
             var command = new ModifyStrokePointsCommand(m_EditableSpline, points, m_SplineKnots.ToArray(), colors, flags);
             m_SplineMemory.PerformAndRecordCommand(command);
@@ -990,8 +995,11 @@ namespace TiltBrush
             if (TransitionBrush.IsTransition(pointer.CurrentBrush))
             {
                 flags = TransitionBrush.FlagsForQuarterTurns(TransitionBrush.PreferredQuarterTurns) |
-                    SketchMemoryScript.StrokeFlags.TransitionControllerHeading |
-                    SketchMemoryScript.StrokeFlags.TransitionVariableDeck;
+                    SketchMemoryScript.StrokeFlags.TransitionControllerHeading;
+            }
+            if (TransitionBrush.HasDeck(pointer.CurrentBrush))
+            {
+                flags |= SketchMemoryScript.StrokeFlags.TransitionVariableDeck;
                 for (int i = 0; i < points.Length; i++)
                     points[i].m_Pressure = SplineDeckPressure(i);
             }
@@ -1091,6 +1099,7 @@ namespace TiltBrush
             ClearSplineBrushPreview();
             RestoreSavedSplineGeometry();
             m_EditableSpline = null;
+            m_SplineEditBrush = null;
             m_SplineHeadingEditData = null;
             m_EditingTransitionSpline = false;
             m_LastAppliedSplinePoints = null;

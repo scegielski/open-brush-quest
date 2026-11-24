@@ -60,7 +60,7 @@ Shader "Brush/TransitionSurface"
                 half fog : TEXCOORD2;
                 half4 tangentWS : TEXCOORD3;
                 float3 positionWS : TEXCOORD4;
-                half deck : TEXCOORD5;
+                half3 surface : TEXCOORD5;
                 half4 color : COLOR;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -79,7 +79,7 @@ Shader "Brush/TransitionSurface"
                 output.fog = ComputeFogFactor(output.positionCS.z);
                 output.color = input.color;
                 output.uv = input.uv;
-                output.deck = input.surface.x;
+                output.surface = input.surface;
                 return output;
             }
 
@@ -103,17 +103,42 @@ Shader "Brush/TransitionSurface"
                 specular += radiance * gloss * specularStrength * saturate(incidence);
             }
 
+            void SurfaceLighting(float3 positionWS, half3 normal, half3 view, half glossPower, half strength,
+                out half3 diffuse, out half3 specular)
+            {
+                diffuse = 0.0h;
+                specular = 0.0h;
+                AccumulateLight(GetMainLight(), normal, view, glossPower, strength, diffuse, specular);
+                #if defined(_ADDITIONAL_LIGHTS)
+                    uint lightCount = GetAdditionalLightsCount();
+                    LIGHT_LOOP_BEGIN(lightCount)
+                        AccumulateLight(GetAdditionalLight(lightIndex, positionWS),
+                            normal, view, glossPower, strength, diffuse, specular);
+                    LIGHT_LOOP_END
+                #endif
+            }
+
             half4 Frag(Varyings input, FRONT_FACE_TYPE facing : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+                if (input.surface.z > 0.5h)
+                {
+                    half3 normal = NormalizeNormalPerPixel(input.normalWS) * IS_FRONT_VFACE(facing, 1.0h, -1.0h);
+                    half3 view = GetWorldSpaceNormalizeViewDir(input.positionWS);
+                    half3 reflection = GlossyEnvironmentReflection(reflect(-view, normal), input.positionWS, 0.18h, 1.0h);
+                    half3 unused, highlights;
+                    SurfaceLighting(input.positionWS, normal, view, 96.0h, 0.95h, unused, highlights);
+                    half3 steel = half3(0.10h, 0.11h, 0.13h) + reflection * half3(0.92h, 0.95h, 1.0h) + highlights;
+                    return half4(MixFog(steel, input.fog), 1.0h);
+                }
                 float2 concreteUV = TRANSFORM_TEX(input.uv, _MainTex);
                 // UVs describe a 3 m repeat. Use whole multiples so grout and coping joints close with the loop.
                 float2 tile = input.uv * 60.0;
                 half grout = max(Joint(tile.x, 0.032), Joint(tile.y, 0.032));
                 half copingJoint = Joint(input.uv.x * 6.0, 0.004);
-                bool deck = input.deck > 0.5;
+                bool deck = input.surface.x > 0.5h;
                 bool coping = !deck && input.uv.y < 0.0;
-                bool tileBand = !deck && !coping && tile.y < 3.0;
+                bool tileBand = !deck && !coping && input.surface.y < 0.5h && tile.y < 3.0;
                 // A shared grout mask controls both the raised glaze and the direct specular response.
                 float2 tileOffset = frac(tile + 0.5) - 0.5;
                 float2 tileDistance = abs(tileOffset);
@@ -140,16 +165,8 @@ Shader "Brush/TransitionSurface"
                 half glossPower = tileBand ? 50.0h : lerp(32.0h, 4.0h, roughness);
                 half specularStrength = tileBand ? 0.85h * tileGlaze : 0.15h * (1.0h - roughness);
                 half3 view = GetWorldSpaceNormalizeViewDir(input.positionWS);
-                half3 diffuse = 0.0h;
-                half3 specular = 0.0h;
-                AccumulateLight(GetMainLight(), normal, view, glossPower, specularStrength, diffuse, specular);
-                #if defined(_ADDITIONAL_LIGHTS)
-                    uint lightCount = GetAdditionalLightsCount();
-                    LIGHT_LOOP_BEGIN(lightCount)
-                        AccumulateLight(GetAdditionalLight(lightIndex, input.positionWS),
-                            normal, view, glossPower, specularStrength, diffuse, specular);
-                    LIGHT_LOOP_END
-                #endif
+                half3 diffuse, specular;
+                SurfaceLighting(input.positionWS, normal, view, glossPower, specularStrength, diffuse, specular);
 
                 // Compress bright direct light smoothly to preserve contrast in the normal map.
                 half peak = Max3(diffuse.r, diffuse.g, diffuse.b);

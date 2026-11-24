@@ -33,7 +33,7 @@ MonoBehaviour:
     m_FallbackState: 0
     m_WaitForCompletion: 0
     m_LocalVariables: []
-  m_DescriptionExtra: Draw the coping line. Click the drawing thumbstick to rotate the transition.
+  m_DescriptionExtra: Concrete with tile, pool coping, and deck. Click the drawing thumbstick to rotate the transition.
   m_BrushAudioLayers:
   - {fileID: 8300000, guid: 103bfb4f4d70ddc4e8ca851eda9568f2, type: 3}
   - {fileID: 8300000, guid: c7079dc05177e3944bed833a35ba7563, type: 3}

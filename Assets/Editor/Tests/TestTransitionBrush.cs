@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System.Linq;
+using System.Collections.Generic;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -144,6 +145,13 @@ namespace TiltBrush
                     deckDepthInches: 42);
                 Assert.That(label.text,
                     Is.EqualTo($"Radius 6 ft 0 in\nHeight -0 ft 2 in\nOrientation {turns * 90}°\nDeck Depth 3 ft 6 in"));
+
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, camera, 72, turns,
+                    style: TransitionBrush.SweepStyle.SteelTransition);
+                Assert.That(label.text, Is.EqualTo($"Radius 6 ft 0 in\nHeight -0 ft 2 in\nOrientation {turns * 90}°"));
+                var line = tool.GetComponentInChildren<LineRenderer>();
+                Assert.That(line.positionCount, Is.EqualTo(TransitionBrush.WallPoints + TransitionBrush.TubePoints));
+                Assert.That(line.GetPosition(0), Is.EqualTo(line.GetPosition(TransitionBrush.TubePoints - 1)));
             }
             finally
             {
@@ -164,6 +172,69 @@ namespace TiltBrush
                 tool.gameObject.SetActive(wasActive);
                 if (opened)
                     EditorSceneManager.CloseScene(scene, removeScene: true);
+            }
+        }
+
+        [Test]
+        public void SteelSurfaceReflectsTheEnvironmentCubemap()
+        {
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("Steel rendering requires a graphics device.");
+
+            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(kBrush);
+            var tile = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            var filter = tile.GetComponent<MeshFilter>();
+            var mesh = Object.Instantiate(filter.sharedMesh);
+            var cameraObject = new GameObject("Steel reflection test camera");
+            var target = RenderTexture.GetTemporary(64, 64, 24, RenderTextureFormat.ARGB32);
+            var image = new Texture2D(64, 64, TextureFormat.RGBA32, false);
+            var previousTarget = RenderTexture.active;
+            var previousReflection = RenderSettings.customReflectionTexture;
+            var previousMode = RenderSettings.defaultReflectionMode;
+            var previousIntensity = RenderSettings.reflectionIntensity;
+            var cube = new Cubemap(16, TextureFormat.RGBA32, true);
+
+            try
+            {
+                tile.layer = 30;
+                filter.sharedMesh = mesh;
+                tile.GetComponent<MeshRenderer>().sharedMaterial = descriptor.Material;
+                mesh.SetUVs(1, Enumerable.Repeat(Vector3.forward, mesh.vertexCount).ToList());
+                for (int face = 0; face < 6; face++)
+                    cube.SetPixels(Enumerable.Repeat(new Color(0.10f, 0.26f, 0.8f), 256).ToArray(), (CubemapFace)face);
+                cube.Apply();
+                RenderSettings.defaultReflectionMode = DefaultReflectionMode.Custom;
+                RenderSettings.customReflectionTexture = cube;
+                RenderSettings.reflectionIntensity = 1f;
+
+                var camera = cameraObject.AddComponent<Camera>();
+                camera.enabled = false;
+                camera.orthographic = true;
+                camera.orthographicSize = 0.6f;
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = Color.clear;
+                camera.cullingMask = 1 << tile.layer;
+                camera.transform.position = Vector3.back * 3f;
+                RenderPipeline.SubmitRenderRequest(camera,
+                    new UniversalRenderPipeline.SingleCameraRequest { destination = target });
+                RenderTexture.active = target;
+                image.ReadPixels(new Rect(0f, 0f, 64f, 64f), 0, 0);
+                var reflected = image.GetPixel(32, 32);
+                Assert.That(reflected.a, Is.GreaterThan(0.99f));
+                Assert.That(reflected.b - reflected.r, Is.GreaterThan(0.30f));
+            }
+            finally
+            {
+                RenderSettings.customReflectionTexture = previousReflection;
+                RenderSettings.defaultReflectionMode = previousMode;
+                RenderSettings.reflectionIntensity = previousIntensity;
+                RenderTexture.active = previousTarget;
+                RenderTexture.ReleaseTemporary(target);
+                Object.DestroyImmediate(cube);
+                Object.DestroyImmediate(image);
+                Object.DestroyImmediate(tile);
+                Object.DestroyImmediate(mesh);
+                Object.DestroyImmediate(cameraObject);
             }
         }
 
@@ -515,6 +586,79 @@ namespace TiltBrush
                 Assert.That(Vector3.Dot(wallFacing, turns >= 2 ? Vector3.left : Vector3.right), Is.GreaterThan(0f));
                 Assert.That(triangles.Length, Is.GreaterThan(6 * (TransitionBrush.ProfilePoints - TransitionBrush.WallStart - 1)));
                 brush.FinalizeSolitaryBrush();
+            }
+            finally
+            {
+                Object.DestroyImmediate(parent);
+                if (mesh != null)
+                    Object.DestroyImmediate(mesh);
+                App.Instance = previousApp;
+                Config.m_SingletonState = previousConfig;
+                if (opened)
+                    EditorSceneManager.CloseScene(scene, removeScene: true);
+            }
+        }
+
+        [TestCase("ConcreteTransition", "Concrete Transition", 26, 0f, 0f, 8f, false)]
+        [TestCase("SteelTransition", "Steel Transition", 43, -1f, 0f, 8f, true)]
+        [TestCase("PoolCoping", "Pool Coping", 12, -10f, 8f - 1.5f * TransitionBrush.UnitsPerInch, 8f, false)]
+        [TestCase("PoolTile", "Pool Tile", 2, 0f, 8f - TransitionBrush.TileBandWidth, 8f, false)]
+        [TestCase("SteelCoping", "Steel Coping", 17, -1f, 8f - TransitionBrush.SteelRadius,
+            8f + TransitionBrush.SteelRadius, true)]
+        public void ConstructionBrushAppearsInTheManifestAndDrawsOnlyItsOwnSurfaces(string asset, string name,
+            int rows, float leftInches, float minHeight, float maxHeight, bool steel)
+        {
+            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(
+                $"Assets/Resources/Brushes/Basic/Transition/{asset}.asset");
+            var manifest = AssetDatabase.LoadAssetAtPath<TiltBrushManifest>("Assets/Manifest.asset");
+            Assert.That(manifest.Brushes, Does.Contain(descriptor));
+            Assert.That(descriptor.Description, Is.EqualTo(name));
+            Assert.That(descriptor.m_ButtonTexture, Is.Not.Null);
+            Assert.That(TransitionBrush.HasDeck(descriptor), Is.False);
+
+            var scene = SceneManager.GetSceneByPath("Assets/Scenes/Main.unity");
+            bool opened = !scene.isLoaded;
+            if (opened)
+                scene = EditorSceneManager.OpenScene("Assets/Scenes/Main.unity", OpenSceneMode.Additive);
+            var previousApp = App.Instance;
+            var previousConfig = Config.m_SingletonState;
+            var parent = new GameObject("Construction brush test canvas");
+            Mesh mesh = null;
+            try
+            {
+                App.Instance = scene.GetRootGameObjects().Select(g => g.GetComponent<App>()).First(a => a != null);
+                Config.m_SingletonState = parent.AddComponent<Config>();
+                var start = TrTransform.T(Vector3.up * 8f);
+                LogAssert.Expect(LogType.Error,
+                    "Instantiating mesh due to calling MeshFilter.mesh during edit mode. This will leak meshes. Please use MeshFilter.sharedMesh instead.");
+                var brush = BaseBrushScript.Create(parent.transform, start, descriptor, Color.gray, 6f);
+                brush.UpdatePosition_LS(TrTransform.T(new Vector3(0f, 8f, 10f)), 1f);
+                brush.ApplyChangesToVisuals();
+                mesh = brush.GetComponent<MeshFilter>().sharedMesh;
+                Assert.That(mesh.vertexCount, Is.EqualTo(2 * rows));
+                Assert.That(mesh.bounds.min.x, Is.EqualTo(leftInches * TransitionBrush.UnitsPerInch).Within(1e-5f));
+                Assert.That(mesh.bounds.min.y, Is.EqualTo(minHeight).Within(1e-5f));
+                Assert.That(mesh.bounds.max.y, Is.EqualTo(maxHeight).Within(1e-5f));
+                Assert.That(mesh.GetIndexCount(0), Is.GreaterThan(0));
+                var region = new List<Vector3>();
+                mesh.GetUVs(1, region);
+                Assert.That(region.Any(uv => uv.z > 0.5f), Is.EqualTo(steel));
+                Assert.That(region.All(uv => uv.x == 0f), Is.True);
+                Assert.That(region.Any(uv => uv.y > 0.5f), Is.EqualTo(TransitionBrush.IsTransition(descriptor)));
+                if (steel)
+                {
+                    int firstTubeVertex = rows - TransitionBrush.TubePoints;
+                    var vertices = mesh.vertices;
+                    Assert.That(vertices[firstTubeVertex], Is.EqualTo(vertices[rows - 1]));
+                    Assert.That(vertices[firstTubeVertex].y - vertices[firstTubeVertex + 8].y,
+                        Is.EqualTo(2f * TransitionBrush.SteelRadius).Within(1e-5f));
+                    int[] triangles = mesh.triangles;
+                    for (int i = 0; i < triangles.Length; i += 3)
+                    {
+                        Assert.That(region[triangles[i]], Is.EqualTo(region[triangles[i + 1]]));
+                        Assert.That(region[triangles[i]], Is.EqualTo(region[triangles[i + 2]]));
+                    }
+                }
             }
             finally
             {

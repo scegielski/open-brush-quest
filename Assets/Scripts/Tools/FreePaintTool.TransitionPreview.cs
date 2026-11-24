@@ -10,6 +10,8 @@ namespace TiltBrush
     public partial class FreePaintTool
     {
         private readonly Vector3[] m_TransitionPreviewPoints = new Vector3[TransitionBrush.ProfilePoints];
+        private readonly Vector3[] m_ConcretePreviewPoints = new Vector3[TransitionBrush.WallPoints];
+        private readonly Vector3[] m_SteelPreviewPoints = new Vector3[TransitionBrush.WallPoints + TransitionBrush.TubePoints];
         private LineRenderer m_TransitionPreviewLine;
         private Material m_TransitionPreviewMaterial;
         private TextMeshPro m_TransitionReadout;
@@ -18,6 +20,7 @@ namespace TiltBrush
         private int m_PreviewHeightInches;
         private int m_PreviewQuarterTurns;
         private int m_PreviewDeckDepthInches;
+        private TransitionBrush.SweepStyle m_PreviewStyle;
         private CanvasScript m_PreviewCanvas;
         private CanvasScript m_TransitionSampleCanvas;
         private int m_TransitionSampleFrame = -1;
@@ -70,8 +73,9 @@ namespace TiltBrush
             Camera camera = painting && App.VrSdk != null ? App.VrSdk.GetVrCamera() : null;
             var canvas = painting ? App.ActiveCanvas : null;
             bool spline = canvas != null && UsesSplinePreview && m_SplineCanvas == canvas;
-            var editedTransition = spline && m_EditingTransitionSpline ? SplineEditData : null;
-            bool transition = editedTransition != null || TransitionBrush.IsTransition(pointer?.CurrentBrush);
+            var editedTransition = spline ? SplineEditData : null;
+            var descriptor = editedTransition != null ? m_SplineEditBrush : pointer?.CurrentBrush;
+            bool transition = TransitionBrush.IsTransition(descriptor);
             if (!transition || canvas == null || camera == null)
             {
                 if (m_TransitionPreviewLine != null)
@@ -126,18 +130,27 @@ namespace TiltBrush
                 brush != null ? brush.QuarterTurns : TransitionBrush.PreferredQuarterTurns;
             float deckScale = editedTransition?.m_BrushScale ??
                 (spline ? 1f : brush?.POINTER_TO_LOCAL ?? canvasFromRoom.scale);
-            DrawTransitionPreview(roomFromCanvas, coping, heading, camera, inches, turns, parent, deckDepth, deckScale);
+            DrawTransitionPreview(roomFromCanvas, coping, heading, camera, inches, turns, parent, deckDepth, deckScale,
+                TransitionBrush.StyleFor(descriptor));
         }
 
         internal void DrawTransitionPreview(TrTransform roomFromCanvas, Vector3 coping, Vector3 heading,
             Camera camera, int inches, int quarterTurns, Transform parent = null,
-            int deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f)
+            int deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f,
+            TransitionBrush.SweepStyle style = TransitionBrush.SweepStyle.PoolTransition)
         {
             if (m_TransitionPreviewLine == null)
                 CreateTransitionPreview(parent != null ? parent : transform);
             m_TransitionPreviewLine.gameObject.SetActive(true);
             float radius = inches * TransitionBrush.UnitsPerInch;
-            float deckDepth = deckDepthInches * TransitionBrush.UnitsPerInch * deckScale;
+            bool hasDeck = style == TransitionBrush.SweepStyle.PoolTransition;
+            float deckDepth = hasDeck ? deckDepthInches * TransitionBrush.UnitsPerInch * deckScale : 0f;
+            var points = style switch
+            {
+                TransitionBrush.SweepStyle.SteelTransition => m_SteelPreviewPoints,
+                TransitionBrush.SweepStyle.ConcreteTransition => m_ConcretePreviewPoints,
+                _ => m_TransitionPreviewPoints
+            };
             bool belowFloor = coping.y <= 0f;
             Vector3 tip = roomFromCanvas * coping;
             Transform head = camera.transform;
@@ -147,13 +160,14 @@ namespace TiltBrush
             if (!belowFloor)
             {
                 Vector3 across = TransitionBrush.Across(heading, quarterTurns);
-                var profile = new TransitionBrush.SurfaceProfile(coping.y, radius, deckDepth);
-                for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
+                var profile = new TransitionBrush.SurfaceProfile(coping.y, radius, deckDepth, hasDeck);
+                for (int row = 0; row < points.Length; row++)
                 {
-                    m_TransitionPreviewPoints[row] = roomFromCanvas *
-                        profile.Vertex(coping, across, row, out _);
+                    Vector2 sample = TransitionBrush.PreviewPoint(style, profile, row, coping.y, deckScale);
+                    points[row] = roomFromCanvas *
+                        (new Vector3(coping.x, sample.y, coping.z) + across * sample.x);
                     if (!profileInView)
-                        profileInView = InPreviewView(camera.WorldToViewportPoint(m_TransitionPreviewPoints[row]),
+                        profileInView = InPreviewView(camera.WorldToViewportPoint(points[row]),
                             camera.nearClipPlane, 0.06f);
                 }
             }
@@ -176,30 +190,34 @@ namespace TiltBrush
                 float scale = 1.5f * readoutScale / Mathf.Max(radius + deckDepth, profileHeight);
                 Vector3 right = head.right * (quarterTurns >= 2 ? -1f : 1f);
                 Vector3 origin = labelPosition - head.up * (2.8f * readoutScale);
-                var profile = new TransitionBrush.SurfaceProfile(profileHeight, radius, deckDepth);
-                float center = (profile.Sample(0, out _).x +
+                var profile = new TransitionBrush.SurfaceProfile(profileHeight, radius, deckDepth, hasDeck);
+                float center = (TransitionBrush.PreviewPoint(style, profile, 0, profileHeight, deckScale).x +
                     profile.Sample(TransitionBrush.ProfilePoints - 1, out _).x) * 0.5f;
-                for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
+                for (int row = 0; row < points.Length; row++)
                 {
-                    Vector2 sample = profile.Sample(row, out _);
-                    m_TransitionPreviewPoints[row] = origin + scale * ((sample.x - center) * right + sample.y * head.up);
+                    Vector2 sample = TransitionBrush.PreviewPoint(style, profile, row, profileHeight, deckScale);
+                    points[row] = origin + scale * ((sample.x - center) * right + sample.y * head.up);
                 }
             }
-            m_TransitionPreviewLine.SetPositions(m_TransitionPreviewPoints);
+            m_TransitionPreviewLine.positionCount = points.Length;
+            m_TransitionPreviewLine.SetPositions(points);
 
             int heightInches = Mathf.RoundToInt(coping.y / TransitionBrush.UnitsPerInch);
             if (m_PreviewRadiusInches != inches || m_PreviewHeightInches != heightInches ||
-                m_PreviewQuarterTurns != quarterTurns || m_PreviewDeckDepthInches != deckDepthInches)
+                m_PreviewQuarterTurns != quarterTurns || m_PreviewDeckDepthInches != deckDepthInches ||
+                m_PreviewStyle != style)
             {
                 m_PreviewRadiusInches = inches;
                 m_PreviewHeightInches = heightInches;
                 m_PreviewQuarterTurns = quarterTurns;
                 m_PreviewDeckDepthInches = deckDepthInches;
+                m_PreviewStyle = style;
                 m_TransitionReadout.text =
                     $"Radius {TransitionBrush.FormatFeetAndInches(inches)}\n" +
                     $"Height {TransitionBrush.FormatFeetAndInches(heightInches)}\n" +
-                    $"Orientation {quarterTurns * 90}°\n" +
-                    $"Deck Depth {TransitionBrush.FormatFeetAndInches(deckDepthInches)}";
+                    $"Orientation {quarterTurns * 90}°";
+                if (hasDeck)
+                    m_TransitionReadout.text += $"\nDeck Depth {TransitionBrush.FormatFeetAndInches(deckDepthInches)}";
             }
             Transform label = m_TransitionReadout.transform;
             label.SetPositionAndRotation(labelPosition, Quaternion.LookRotation(labelPosition - head.position, head.up));
