@@ -1154,7 +1154,7 @@ namespace TiltBrush
         /// If overrideDesc passed, use that for the visuals -- m_CurrentBrush does not change.
         public void CreateNewLine(CanvasScript canvas, TrTransform xf_CS,
                                   ParametricStrokeCreator creator, BrushDescriptor overrideDesc = null,
-                                  bool trackTransitionController = false)
+                                  bool trackTransitionController = false, bool replayingStroke = false)
         {
             // If straightedge is enabled, we may have a minimum size requirement.
             // Initialize parametric stroke creator for our type of straightedge.
@@ -1197,6 +1197,8 @@ namespace TiltBrush
                 transition.NewStrokeQuarterTurns = TransitionBrush.PreferredQuarterTurns;
                 transition.TrackControllerForNewStroke = tracksController;
                 transition.CurrentControllerOrientation = xf_CS.rotation;
+                if (!replayingStroke && TransitionBrush.HasDeck(desc))
+                    transition.NewStrokeDeckDepthInches = TransitionBrush.DeckDepthInches;
             }
         }
 
@@ -1270,8 +1272,23 @@ namespace TiltBrush
                 strokeFlags |= TransitionBrush.FlagsForQuarterTurns(transition.QuarterTurns);
                 if (transition.TrackControllerForNewStroke)
                     strokeFlags |= SketchMemoryScript.StrokeFlags.TransitionControllerHeading;
+                if (!bDiscard && transition.NewStrokeDeckDepthInches is float deckDepth)
+                {
+                    strokeFlags |= SketchMemoryScript.StrokeFlags.TransitionVariableDeck;
+                    float pressure = TransitionBrush.EncodeDeckDepth(deckDepth);
+                    for (int i = 0; i < m_ControlPoints.Count; ++i)
+                    {
+                        var point = m_ControlPoints[i];
+                        point.m_Pressure = pressure;
+                        m_ControlPoints[i] = point;
+                    }
+                }
             }
 
+            BrushDescriptor lineBrush = m_CurrentLine.Descriptor;
+            bool preserveAppearance = m_CurrentLine is TransitionBrush || lineBrush != m_CurrentBrush;
+            float lineSize = preserveAppearance ? m_CurrentLine.BaseSize_PS : m_CurrentBrushSize;
+            Color lineColor = preserveAppearance ? m_CurrentLine.CurrentColor : m_CurrentColor;
             if (ApiManager.Instance.HasOutgoingListeners)
             {
                 if (rMemoryObjectForPlayback == null)
@@ -1279,8 +1296,8 @@ namespace TiltBrush
                     // Painting
                     ApiManager.Instance.HandleStrokeListeners(
                         m_ControlPoints,
-                        CurrentBrush.m_Guid,
-                        App.BrushColor.CurrentColor,
+                        lineBrush.m_Guid,
+                        lineColor,
                         PointerManager.m_Instance.MainPointer.BrushSize01
                     );
                 }
@@ -1327,9 +1344,9 @@ namespace TiltBrush
                 if (rMemoryObjectForPlayback == null)
                 {
                     SketchMemoryScript.m_Instance.MemorizeBatchedBrushStroke(
-                        subset, m_CurrentColor,
-                        m_CurrentBrush.m_Guid,
-                        m_CurrentBrushSize,
+                        subset, lineColor,
+                        lineBrush.m_Guid,
+                        lineSize,
                         m_CurrentLine.StrokeScale,
                         m_ControlPoints, strokeFlags,
                         WidgetManager.m_Instance.ActiveStencil,
@@ -1372,9 +1389,9 @@ namespace TiltBrush
                 if (rMemoryObjectForPlayback == null)
                 {
                     SketchMemoryScript.m_Instance.MemorizeBrushStroke(
-                        m_CurrentLine, m_CurrentColor,
-                        m_CurrentBrush.m_Guid,
-                        m_CurrentBrushSize,
+                        m_CurrentLine, lineColor,
+                        lineBrush.m_Guid,
+                        lineSize,
                         m_CurrentLine.StrokeScale,
                         m_ControlPoints, strokeFlags,
                         WidgetManager.m_Instance.ActiveStencil, m_LineLength_CS,
@@ -1454,7 +1471,7 @@ namespace TiltBrush
             m_CurrentBrushSize = stroke.m_BrushSize;
             m_CurrentPressure = cp0.m_Pressure;
             m_CurrentColor = stroke.m_Color;
-            CreateNewLine(canvas, xf_CS, null);
+            CreateNewLine(canvas, xf_CS, null, replayingStroke: true);
             m_CurrentLine.SetIsLoading();
             m_CurrentLine.RandomSeed = stroke.m_Seed;
             m_CurrentLine.SetStrokeData(stroke);

@@ -18,7 +18,65 @@ namespace TiltBrush
 {
     public class ActionButton : BaseButton
     {
+        private const float kRepeatDelay = 1f;
+        private const float kRepeatInterval = 0.125f;
+
         [SerializeField] private UnityEngine.Events.UnityEvent m_Action;
+        [SerializeField] private bool m_RepeatOnHold;
+
+        private float m_NextRepeatTime;
+        private int m_LastHeldFrame;
+
+        private bool RepeatsOnHold => m_RepeatOnHold && !m_LongPressReleaseButton;
+
+        protected override void Awake()
+        {
+            base.Awake();
+            if (RepeatsOnHold)
+                m_HoldFocus = false;
+        }
+
+        public override void ButtonPressed(RaycastHit hitInfo)
+        {
+            if (RepeatsOnHold)
+            {
+                if (!InputManager.m_Instance.GetCommandDown(InputManager.SketchCommands.Activate))
+                    return;
+
+                m_NextRepeatTime = Time.unscaledTime + kRepeatDelay;
+                m_LastHeldFrame = Time.frameCount;
+            }
+            base.ButtonPressed(hitInfo);
+        }
+
+        public override void ButtonHeld(RaycastHit hitInfo)
+        {
+            if (!RepeatsOnHold || !IsPressed())
+                return;
+
+            // When the panel itself loses focus, it may stop updating before resetting the button.
+            int frame = Time.frameCount;
+            if (frame > m_LastHeldFrame + 1)
+            {
+                ResetState();
+                return;
+            }
+            m_LastHeldFrame = frame;
+
+            float now = Time.unscaledTime;
+            if (now >= m_NextRepeatTime)
+            {
+                m_NextRepeatTime = now + kRepeatInterval;
+                OnButtonPressed();
+            }
+        }
+
+        protected override void OnDisable()
+        {
+            if (RepeatsOnHold)
+                ResetState();
+            base.OnDisable();
+        }
 
         protected override void OnButtonPressed()
         {

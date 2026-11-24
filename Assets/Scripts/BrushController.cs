@@ -50,11 +50,16 @@ namespace TiltBrush
             m_ActiveBrush = brush;
 
             // Reset our tool when the user picks a new brush unless it is repainting.
-            if (SketchSurfacePanel.m_Instance.GetCurrentToolType() != BaseTool.ToolType.RepaintTool &&
-                SketchSurfacePanel.m_Instance.GetCurrentToolType() != BaseTool.ToolType.ScriptedTool &&
-                SketchSurfacePanel.m_Instance.m_LastCommand?.GetType() != typeof(RepaintStrokeCommand))
+            var sketchSurface = SketchSurfacePanel.m_Instance;
+            if (sketchSurface.ActiveTool is RepaintTool repaint)
             {
-                SketchSurfacePanel.m_Instance.EnableDefaultTool();
+                // The trigger that picks a brush from the palette must not repaint the sketch.
+                repaint.EatInput();
+            }
+            else if (sketchSurface.GetCurrentToolType() != BaseTool.ToolType.ScriptedTool &&
+                sketchSurface.m_LastCommand?.GetType() != typeof(RepaintStrokeCommand))
+            {
+                sketchSurface.EnableDefaultTool();
             }
 
             if (BrushChanged != null)

@@ -9,34 +9,68 @@ namespace TiltBrush
 {
     public sealed class TransitionBrush : GeometryBrush
     {
-        internal enum SweepStyle { None, PoolTransition, ConcreteTransition, SteelTransition, PoolCoping, PoolTile, SteelCoping }
+        internal enum SweepStyle
+        {
+            None, PoolTransition, UntiledPoolTransition, ConcreteTransition, SteelTransition,
+            PoolCoping, PoolTile, SteelCoping
+        }
+
+        internal enum CopingKind { None, Pool, Steel }
+
+        internal readonly struct SurfaceOptions
+        {
+            internal readonly CopingKind Coping;
+            internal readonly bool Tile;
+            internal readonly bool Deck;
+
+            internal SurfaceOptions(CopingKind coping, bool tile, bool deck)
+            {
+                Coping = coping;
+                Tile = tile;
+                Deck = deck;
+            }
+        }
+
+        internal const StrokeFlags SurfaceOptionFlags = StrokeFlags.TransitionSurfaceOverride |
+            StrokeFlags.TransitionPoolCoping | StrokeFlags.TransitionSteelCoping |
+            StrokeFlags.TransitionTile | StrokeFlags.TransitionDeck;
 
         internal const string BrushName = "Transition";
+        internal const string UntiledPoolBrushName = "Transition with Pool Coping";
         internal const int MinRadiusInches = 1;
         internal const int MaxRadiusInches = 600;
-        private const int kDefaultRadiusInches = 72;
+        private const int kDefaultRadiusInches = 54;
         private const string kRadiusPreference = "TransitionRadiusInches";
+        private const string kDeckDepthPreference = "TransitionDeckDepthInches";
+        private const string kRadiusHalfInchesPreference = "TransitionRadiusHalfInches";
+        private const string kDeckDepthHalfInchesPreference = "TransitionDeckDepthHalfInches";
         private const string kSweepLeftPreference = "TransitionSweepLeft";
         private const string kOrientationPreference = "TransitionQuarterTurns";
         internal const float UnitsPerInch = 0.0254f * App.METERS_TO_UNITS;
         private const float kConcreteRepeat = 3f * App.METERS_TO_UNITS;
+        private const int kCopingRampSegments = 4;
         private const int kNoseSegments = 8;
         private const int kArcSegments = 24;
         private const float kCopingWidth = 10f * UnitsPerInch;
-        private const float kNoseRadius = 0.75f * UnitsPerInch;
-        internal const int DefaultDeckDepthInches = 36;
+        private const float kNoseProjection = 1.5f * UnitsPerInch;
+        private const float kNoseDrop = 2.25f * UnitsPerInch;
+        private const float kCopingRise = 0.6f * UnitsPerInch;
+        internal const int DefaultDeckDepthInches = 12;
+        internal const int LegacyPoolDeckDepthInches = 36;
         internal const int MaxDeckDepthInches = 240;
-        private const int kCopingStart = 2;
-        internal const int TopOfCoping = kCopingStart + 1;
+        internal const int DeckPoints = 2;
+        private const int kCopingStart = DeckPoints;
+        internal const int TopOfCoping = kCopingStart + kCopingRampSegments;
         internal const int WallStart = TopOfCoping + kNoseSegments;
         internal const int WallPoints = kArcSegments + 2;
         internal const int ProfilePoints = WallStart + WallPoints;
         private const int kTubeSides = 16;
         internal const int TubePoints = kTubeSides + 1;
-        private const int kPoolCopingPoints = kNoseSegments + 4;
+        private const int kCopingFaceEnd = kCopingRampSegments + kNoseSegments;
+        private const int kPoolCopingPoints = kCopingFaceEnd + 3;
         internal const float SteelRadius = UnitsPerInch;
         internal const float TileBandWidth = 0.15f * App.METERS_TO_UNITS;
-        private const int kMaxProfilePoints = WallPoints + TubePoints;
+        private const int kMaxProfilePoints = DeckPoints + WallPoints + TubePoints;
         private const float kMinPositionDelta = 0.0001f;
 
         private readonly List<Knot> m_Stations = new();
@@ -44,6 +78,9 @@ namespace TiltBrush
         private SweepStyle m_Style;
         internal int NewStrokeQuarterTurns { get; set; }
         internal bool TrackControllerForNewStroke { get; set; }
+        internal bool NewStrokeAutoOrient { get; set; }
+        internal SurfaceOptions? NewStrokeSurfaceOptions { get; set; }
+        internal float? NewStrokeDeckDepthInches { get; set; }
         internal float? PreviewStartDeckPressure { get; set; }
         internal Quaternion CurrentControllerOrientation { get; set; }
         internal int QuarterTurns => m_StrokeData == null ? NewStrokeQuarterTurns :
@@ -51,6 +88,7 @@ namespace TiltBrush
         internal Quaternion? StrokeOrientation => GetSavedOrientation(m_StrokeData);
         internal bool TracksController => m_StrokeData == null ? TrackControllerForNewStroke :
             HasControllerHeading(m_StrokeData);
+        private bool AutoOrient => m_StrokeData == null ? NewStrokeAutoOrient : SplineCurve.AutoOrients(m_StrokeData);
 
         internal static bool HasControllerHeading(StrokeData stroke) =>
             (stroke.m_Flags & StrokeFlags.TransitionControllerHeading) != 0;
@@ -61,6 +99,8 @@ namespace TiltBrush
 
         internal static float DecodeDeckDepth(float pressure) =>
             float.IsFinite(pressure) ? Mathf.Clamp01(pressure) * MaxDeckDepthInches : DefaultDeckDepthInches;
+
+        internal static float EncodeDeckDepth(float inches) => Mathf.Clamp01(inches / MaxDeckDepthInches);
 
         internal static Quaternion? GetSavedOrientation(StrokeData stroke)
         {
@@ -103,6 +143,7 @@ namespace TiltBrush
         internal static SweepStyle StyleFor(BrushDescriptor brush) => brush?.m_DurableName switch
         {
             BrushName => SweepStyle.PoolTransition,
+            UntiledPoolBrushName => SweepStyle.UntiledPoolTransition,
             "Concrete Transition" => SweepStyle.ConcreteTransition,
             "Steel Transition" => SweepStyle.SteelTransition,
             "Pool Coping" => SweepStyle.PoolCoping,
@@ -111,22 +152,86 @@ namespace TiltBrush
             _ => SweepStyle.None
         };
 
-        internal static bool IsTransition(BrushDescriptor brush) =>
-            StyleFor(brush) is SweepStyle.PoolTransition or SweepStyle.ConcreteTransition or SweepStyle.SteelTransition;
+        internal static bool IsTransition(BrushDescriptor brush) => IsTransition(StyleFor(brush));
 
-        internal static bool HasDeck(BrushDescriptor brush) => StyleFor(brush) == SweepStyle.PoolTransition;
+        private static bool IsTransition(SweepStyle style) =>
+            style is SweepStyle.PoolTransition or SweepStyle.UntiledPoolTransition
+                or SweepStyle.ConcreteTransition or SweepStyle.SteelTransition;
 
-        internal static int RadiusInches
+        internal static bool HasDeck(BrushDescriptor brush) => HasDeck(StyleFor(brush));
+
+        internal static bool HasDeck(SweepStyle style) => OptionsFor(style).Deck;
+
+        internal static bool UsesPoolCoping(SweepStyle style) =>
+            style is SweepStyle.PoolTransition or SweepStyle.UntiledPoolTransition;
+
+        internal static SurfaceOptions OptionsFor(SweepStyle style) => style switch
         {
-            get => Mathf.Clamp(PlayerPrefs.GetInt(kRadiusPreference, kDefaultRadiusInches),
-                MinRadiusInches, MaxRadiusInches);
-            set => PlayerPrefs.SetInt(kRadiusPreference, Mathf.Clamp(value, MinRadiusInches, MaxRadiusInches));
+            SweepStyle.PoolTransition => new SurfaceOptions(CopingKind.Pool, tile: true, deck: true),
+            SweepStyle.UntiledPoolTransition => new SurfaceOptions(CopingKind.Pool, tile: false, deck: true),
+            SweepStyle.SteelTransition => new SurfaceOptions(CopingKind.Steel, tile: false, deck: true),
+            _ => default
+        };
+
+        internal static SurfaceOptions OptionsFor(BrushDescriptor brush, StrokeData stroke = null)
+        {
+            SweepStyle style = StyleFor(brush);
+            StrokeFlags flags = stroke?.m_Flags ?? StrokeFlags.None;
+            return IsTransition(style) ? OptionsFor(style, flags) : default;
         }
 
-        internal static string FormatFeetAndInches(int inches)
+        private static SurfaceOptions OptionsFor(SweepStyle style, StrokeFlags flags)
         {
-            int absolute = Mathf.Abs(inches);
-            return $"{(inches < 0 ? "-" : "")}{absolute / 12} ft {absolute % 12} in";
+            if ((flags & StrokeFlags.TransitionSurfaceOverride) == 0)
+                return OptionsFor(style);
+            CopingKind coping = (flags & StrokeFlags.TransitionSteelCoping) != 0 ? CopingKind.Steel :
+                (flags & StrokeFlags.TransitionPoolCoping) != 0 ? CopingKind.Pool : CopingKind.None;
+            return new SurfaceOptions(coping, (flags & StrokeFlags.TransitionTile) != 0,
+                (flags & StrokeFlags.TransitionDeck) != 0);
+        }
+
+        internal static StrokeFlags FlagsWithSurfaceOptions(StrokeFlags flags, SurfaceOptions options)
+        {
+            flags = (flags & ~SurfaceOptionFlags) | StrokeFlags.TransitionSurfaceOverride;
+            flags |= options.Coping switch
+            {
+                CopingKind.Pool => StrokeFlags.TransitionPoolCoping,
+                CopingKind.Steel => StrokeFlags.TransitionSteelCoping,
+                _ => StrokeFlags.None
+            };
+            SketchMemoryScript.SetFlag(ref flags, StrokeFlags.TransitionTile, options.Tile);
+            SketchMemoryScript.SetFlag(ref flags, StrokeFlags.TransitionDeck, options.Deck);
+            return flags;
+        }
+
+        internal static int LegacyDeckDepth(SweepStyle style) => UsesPoolCoping(style) ? LegacyPoolDeckDepthInches : 0;
+
+        internal static float DeckDepthInches => DeckDepthHalfInches * 0.5f;
+
+        internal static int DeckDepthHalfInches
+        {
+            get => Mathf.Clamp(PlayerPrefs.GetInt(kDeckDepthHalfInchesPreference,
+                Mathf.Clamp(PlayerPrefs.GetInt(kDeckDepthPreference, DefaultDeckDepthInches), 0, MaxDeckDepthInches) * 2),
+                0, MaxDeckDepthInches * 2);
+            set => PlayerPrefs.SetInt(kDeckDepthHalfInchesPreference, Mathf.Clamp(value, 0, MaxDeckDepthInches * 2));
+        }
+
+        internal static float RadiusInches => RadiusHalfInches * 0.5f;
+
+        internal static int RadiusHalfInches
+        {
+            get => Mathf.Clamp(PlayerPrefs.GetInt(kRadiusHalfInchesPreference,
+                Mathf.Clamp(PlayerPrefs.GetInt(kRadiusPreference, kDefaultRadiusInches), MinRadiusInches, MaxRadiusInches) * 2),
+                MinRadiusInches * 2, MaxRadiusInches * 2);
+            set => PlayerPrefs.SetInt(kRadiusHalfInchesPreference,
+                Mathf.Clamp(value, MinRadiusInches * 2, MaxRadiusInches * 2));
+        }
+
+        internal static string FormatFeetAndInches(float inches)
+        {
+            int halfInches = Mathf.RoundToInt(Mathf.Abs(inches) * 2f);
+            string fraction = halfInches % 2 != 0 ? ".5" : "";
+            return $"{(inches < 0f && halfInches > 0 ? "-" : "")}{halfInches / 24} ft {halfInches % 24 / 2}{fraction} in";
         }
 
         public override GeometryPool.VertexLayout GetVertexLayout(BrushDescriptor desc)
@@ -158,23 +263,25 @@ namespace TiltBrush
         // The rounded lip covers the upper part of the wall without changing the radius or floor run.
         internal readonly struct SurfaceProfile
         {
-            private readonly float m_Height, m_Radius, m_Nose, m_Width, m_JoinHeight, m_JoinRun;
+            private readonly float m_Radius, m_JoinHeight, m_JoinRun;
             private readonly float m_WallAngle, m_ArcRun, m_FloorRun, m_StraightLength;
             private readonly float m_DeckDepth;
+            private readonly CopingProfile m_Coping;
 
             internal SurfaceProfile(float height, float radius, float deckDepth = DefaultDeckDepthInches * UnitsPerInch,
                 bool poolCoping = true)
             {
-                m_Height = Mathf.Max(0f, height);
+                height = Mathf.Max(0f, height);
                 m_Radius = radius;
-                m_Nose = poolCoping ? Mathf.Min(kNoseRadius, m_Height * 0.2f) : 0f;
-                m_Width = poolCoping ? Mathf.Min(kCopingWidth, m_Height * 4f) : 0f;
-                m_DeckDepth = poolCoping && m_Height > 0f ? deckDepth : 0f;
-                m_JoinHeight = m_Height - 2f * m_Nose;
-                m_FloorRun = radius * Mathf.Sin(ArcAngle(m_Height, radius));
+                float drop = poolCoping ? Mathf.Min(kNoseDrop, height * 0.4f) : 0f;
+                float width = poolCoping ? Mathf.Min(kCopingWidth, height * 4f) : 0f;
+                m_DeckDepth = poolCoping && height > 0f ? deckDepth : 0f;
+                m_JoinHeight = height - drop;
+                m_FloorRun = radius * Mathf.Sin(ArcAngle(height, radius));
                 m_WallAngle = ArcAngle(m_JoinHeight, radius);
                 m_ArcRun = radius * Mathf.Sin(m_WallAngle);
                 m_JoinRun = m_FloorRun - m_ArcRun;
+                m_Coping = new CopingProfile(height, width, drop, m_JoinRun);
                 m_StraightLength = Mathf.Max(0f, m_JoinHeight - radius);
             }
 
@@ -183,21 +290,15 @@ namespace TiltBrush
 
             internal Vector2 Sample(int row, out float distance)
             {
-                if (row < TopOfCoping)
+                if (row < kCopingStart)
                 {
-                    distance = -m_Width - m_Nose * Mathf.PI;
-                    if (row == 0)
-                        distance -= m_DeckDepth;
-                    return new Vector2(-m_Width - (row == 0 ? m_DeckDepth : 0f), m_Height);
+                    Vector2 edge = m_Coping.Sample(0, out distance);
+                    float depth = row == 0 ? m_DeckDepth : 0f;
+                    distance -= depth;
+                    return edge - Vector2.right * depth;
                 }
                 if (row < WallStart)
-                {
-                    float fraction = (row - TopOfCoping) / (float)kNoseSegments;
-                    float angle = fraction * Mathf.PI;
-                    distance = -m_Nose * (Mathf.PI - angle);
-                    return new Vector2(m_Nose * Mathf.Sin(angle) + m_JoinRun * fraction,
-                        m_Height - m_Nose * (1f - Mathf.Cos(angle)));
-                }
+                    return m_Coping.Sample(row - kCopingStart, out distance);
                 if (row == WallStart)
                 {
                     distance = 0f;
@@ -219,38 +320,91 @@ namespace TiltBrush
             }
         }
 
+        // The same raised cap and bullnose sit above both pool transitions and the standalone block.
+        private readonly struct CopingProfile
+        {
+            private readonly float m_Height, m_Width, m_Drop, m_JoinRun;
+
+            internal CopingProfile(float height, float width, float drop, float joinRun)
+            {
+                m_Height = height;
+                m_Width = width;
+                m_Drop = drop;
+                m_JoinRun = joinRun;
+            }
+
+            internal Vector2 Sample(int row, out float distance)
+            {
+                float projection = m_Drop * (kNoseProjection / kNoseDrop);
+                float lipLength = Mathf.PI * (projection + 0.5f * m_Drop) * 0.5f + m_JoinRun;
+                if (row < kCopingRampSegments)
+                {
+                    float fraction = row / (float)kCopingRampSegments;
+                    float rise = m_Drop * (kCopingRise / kNoseDrop);
+                    distance = -lipLength - m_Width * (1f - fraction);
+                    return new Vector2(-m_Width * (1f - fraction),
+                        m_Height - Mathf.SmoothStep(rise, 0f, fraction));
+                }
+                if (row == kCopingFaceEnd)
+                {
+                    distance = 0f;
+                    return new Vector2(m_JoinRun, m_Height - m_Drop);
+                }
+                float noseFraction = (row - kCopingRampSegments) / (float)kNoseSegments;
+                float angle = noseFraction * Mathf.PI;
+                float dropFraction = 0.5f * (1f - Mathf.Cos(angle));
+                distance = -lipLength * (1f - noseFraction);
+                return new Vector2(projection * Mathf.Sin(angle) + m_JoinRun * dropFraction,
+                    m_Height - m_Drop * dropFraction);
+            }
+        }
+
         private static Vector2 StandaloneCopingPoint(int row, out float distance)
         {
+            // Keep the entire standalone block in the shader's coping region.
             const float copingUvOffset = 0.001f;
-            const float lipLength = Mathf.PI * kNoseRadius;
-            if (row == 0 || row == kPoolCopingPoints - 1)
-            {
-                distance = row == 0 ? -copingUvOffset :
-                    -copingUvOffset - 2f * kCopingWidth - lipLength - 2f * kNoseRadius;
-                return new Vector2(-kCopingWidth, 0f);
-            }
             if (row == kPoolCopingPoints - 2)
             {
-                distance = -copingUvOffset - 2f * kCopingWidth - lipLength;
-                return new Vector2(-kCopingWidth, -2f * kNoseRadius);
+                distance = -copingUvOffset - kCopingWidth;
+                return new Vector2(-kCopingWidth, -kNoseDrop);
             }
-            float angle = (row - 1f) * (Mathf.PI / kNoseSegments);
-            distance = -copingUvOffset - kCopingWidth - angle * kNoseRadius;
-            return new Vector2(kNoseRadius * Mathf.Sin(angle), kNoseRadius * (Mathf.Cos(angle) - 1f));
+            var profile = new CopingProfile(0f, kCopingWidth, kNoseDrop, 0f);
+            bool closing = row == kPoolCopingPoints - 1;
+            Vector2 point = profile.Sample(closing ? 0 : row, out distance);
+            distance = closing ? -copingUvOffset - kCopingWidth - (point.y + kNoseDrop)
+                : distance - copingUvOffset;
+            return point;
         }
 
         internal static Vector2 SteelProfilePoint(int row, float radius) =>
             new Vector2(Mathf.Sin((row % kTubeSides) * (2f * Mathf.PI / kTubeSides)) * radius,
                 Mathf.Cos((row % kTubeSides) * (2f * Mathf.PI / kTubeSides)) * radius);
 
-        internal static Vector2 PreviewPoint(SweepStyle style, SurfaceProfile profile, int row, float height, float scale)
+        internal static int PreviewPointCount(SurfaceOptions options, float deckDepth)
         {
-            if (style == SweepStyle.PoolTransition)
-                return profile.Sample(row, out _);
-            if (style == SweepStyle.SteelTransition)
+            if (options.Coping == CopingKind.Pool)
+                return options.Deck ? ProfilePoints : ProfilePoints - DeckPoints;
+            int deck = options.Deck && deckDepth > 0f ? DeckPoints : 0;
+            return deck + WallPoints + (options.Coping == CopingKind.Steel ? TubePoints : 0);
+        }
+
+        internal static Vector2 PreviewPoint(SurfaceOptions options, SurfaceProfile profile, int row, float height,
+            float scale, float deckDepth)
+        {
+            if (options.Coping == CopingKind.Pool)
+                return profile.Sample(options.Deck ? row : row + DeckPoints, out _);
+            bool steel = options.Coping == CopingKind.Steel;
+            float tubeRadius = steel ? SteelRadius * scale : 0f;
+            if (options.Deck && deckDepth > 0f)
+            {
+                if (row < DeckPoints)
+                    return new Vector2(-tubeRadius - (row == 0 ? deckDepth : 0f), height - tubeRadius);
+                row -= DeckPoints;
+            }
+            if (steel)
             {
                 if (row < TubePoints)
-                    return SteelProfilePoint(row, SteelRadius * scale) + Vector2.up * (height - SteelRadius * scale);
+                    return SteelProfilePoint(row, tubeRadius) + Vector2.up * (height - tubeRadius);
                 row -= TubePoints;
             }
             return profile.Sample(WallStart + row, out _);
@@ -270,19 +424,27 @@ namespace TiltBrush
 
         protected override void ControlPointsChanged(int firstChanged)
         {
-            bool pool = m_Style == SweepStyle.PoolTransition;
-            bool steelWall = m_Style == SweepStyle.SteelTransition;
+            bool transition = IsTransition(m_Style);
+            float floorHeight = transition && App.Instance != null ? App.Scene.FloorHeightCanvasUnits : 0f;
+            StrokeFlags flags = m_StrokeData?.m_Flags ?? StrokeFlags.None;
+            SurfaceOptions options = transition ? (m_StrokeData == null
+                ? NewStrokeSurfaceOptions ?? OptionsFor(m_Style) : OptionsFor(m_Style, flags)) : default;
+            bool pool = options.Coping == CopingKind.Pool;
+            bool steelWall = options.Coping == CopingKind.Steel;
             bool standaloneSteel = m_Style == SweepStyle.SteelCoping;
-            bool wallOnly = m_Style == SweepStyle.ConcreteTransition || steelWall;
             bool standaloneCoping = m_Style == SweepStyle.PoolCoping;
             bool standaloneTile = m_Style == SweepStyle.PoolTile;
-            int tubeStart = steelWall ? WallPoints : standaloneSteel ? 0 : -1;
-            int wallStart = pool ? WallStart : wallOnly ? 0 : -1;
-            int rowCount = m_Style switch
+            bool variableDeck = options.Deck &&
+                (PreviewStartDeckPressure.HasValue || (m_StrokeData != null && HasVariableDeck(m_StrokeData)));
+            int presetDepth = (flags & StrokeFlags.TransitionSurfaceOverride) != 0
+                ? DefaultDeckDepthInches : LegacyDeckDepth(m_Style);
+            float defaultDepth = NewStrokeDeckDepthInches ?? presetDepth;
+            bool deck = options.Deck && (pool || variableDeck || defaultDepth > 0f);
+            int copingStart = deck ? DeckPoints : 0;
+            int wallStart = transition ? copingStart + (pool ? WallStart - DeckPoints : 0) : -1;
+            int tubeStart = steelWall ? wallStart + WallPoints : standaloneSteel ? 0 : -1;
+            int rowCount = transition ? (steelWall ? tubeStart + TubePoints : wallStart + WallPoints) : m_Style switch
             {
-                SweepStyle.PoolTransition => ProfilePoints,
-                SweepStyle.ConcreteTransition => WallPoints,
-                SweepStyle.SteelTransition => WallPoints + TubePoints,
                 SweepStyle.PoolCoping => kPoolCopingPoints,
                 SweepStyle.SteelCoping => TubePoints,
                 SweepStyle.PoolTile => 2,
@@ -307,13 +469,12 @@ namespace TiltBrush
             }
 
             m_geometry.NumVerts = count * rowCount;
-            int turns = QuarterTurns;
+            bool autoOrient = AutoOrient;
+            int turns = autoOrient ? QuarterTurns & 2 : QuarterTurns;
             Quaternion? orientation = StrokeOrientation;
-            bool tracksController = TracksController;
-            bool variableDeck = pool &&
-                (PreviewStartDeckPressure.HasValue || (m_StrokeData != null && HasVariableDeck(m_StrokeData)));
-            bool hasOffsets = m_StrokeData != null && HasHeadingOffsets(m_StrokeData);
-            Vector3? fixedHeading = orientation.HasValue ? HorizontalHeading(orientation.Value) : null;
+            bool tracksController = !autoOrient && TracksController;
+            bool hasOffsets = !autoOrient && m_StrokeData != null && HasHeadingOffsets(m_StrokeData);
+            Vector3? fixedHeading = !autoOrient && orientation.HasValue ? HorizontalHeading(orientation.Value) : null;
             bool reverseWinding = turns >= 2;
             bool closed = count > 3 && (m_Stations[0].point.m_Pos -
                 m_Stations[count - 1].point.m_Pos).sqrMagnitude < kMinPositionDelta * kMinPositionDelta;
@@ -349,7 +510,7 @@ namespace TiltBrush
                     frameUp.Normalize();
                     frameRight = Vector3.Cross(frameUp, path).normalized;
                 }
-                float depthInches = DefaultDeckDepthInches;
+                float depthInches = defaultDepth;
                 if (variableDeck)
                 {
                     // GeometryBrush takes the first moving sample's pressure for the initial knot.
@@ -358,7 +519,11 @@ namespace TiltBrush
                         : m_Stations[station].point.m_Pressure;
                     depthInches = DecodeDeckDepth(pressure);
                 }
-                var profile = new SurfaceProfile(coping.y, radius, depthInches * UnitsPerInch * widthScale, pool);
+                float deckDepth = depthInches * UnitsPerInch * widthScale;
+                // If the floor rises above the coping, collapse the wall at the authored point.
+                float profileFloor = Mathf.Min(coping.y, floorHeight);
+                Vector3 floorOffset = Vector3.up * profileFloor;
+                var profile = new SurfaceProfile(coping.y - profileFloor, radius, deckDepth, pool);
                 int first = station * rowCount;
                 for (int row = 0; row < rowCount; row++)
                 {
@@ -375,6 +540,25 @@ namespace TiltBrush
                         profileDistance = ring * (2f * Mathf.PI / kTubeSides) * tubeRadius;
                         surface = Vector3.forward;
                     }
+                    else if (deck && row < copingStart)
+                    {
+                        if (pool)
+                        {
+                            vertices[first + row] = profile.Vertex(coping, across, row, out profileDistance) + floorOffset;
+                        }
+                        else
+                        {
+                            Vector3 deckEdge = coping;
+                            if (steelWall)
+                            {
+                                float side = Vector3.Dot(across, frameRight) < 0f ? -1f : 1f;
+                                deckEdge -= SteelRadius * widthScale * (frameUp + frameRight * side);
+                            }
+                            profileDistance = row == 0 ? -deckDepth : 0f;
+                            vertices[first + row] = deckEdge + across * profileDistance;
+                        }
+                        surface = Vector3.right;
+                    }
                     else if (standaloneCoping)
                     {
                         Vector2 point = StandaloneCopingPoint(row, out profileDistance) * widthScale;
@@ -390,12 +574,10 @@ namespace TiltBrush
                     }
                     else
                     {
-                        vertices[first + row] = profile.Vertex(coping, across,
-                            pool ? row : WallStart + row, out profileDistance);
-                        if (wallOnly)
+                        vertices[first + row] = profile.Vertex(coping, across, WallStart + row - wallStart,
+                            out profileDistance) + floorOffset;
+                        if (!options.Tile)
                             surface = Vector3.up;
-                        else if (row < kCopingStart)
-                            surface = Vector3.right;
                     }
                     SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / kConcreteRepeat));
                     SetUv1(first, row, surface);
@@ -423,14 +605,14 @@ namespace TiltBrush
                     if (steelWall && row == tubeStart - 1)
                         lower = row;
                     // The deck and coping share an edge with separate material coordinates.
-                    if (pool && row == kCopingStart - 1)
-                        lower++;
-                    if (pool && row == kCopingStart)
-                        upper--;
+                    if (deck && row == copingStart - 1)
+                        lower = pool ? lower + 1 : row;
+                    if (deck && row == copingStart)
+                        upper = pool ? upper - 1 : row;
                     // The join and first arc vertex coincide when there is no vertical face.
                     if (collapsedJoin && row == wallStart)
                         lower++;
-                    if (collapsedJoin && row == wallStart + 1 && wallStart > 0)
+                    if (collapsedJoin && row == wallStart + 1 && pool)
                         upper--;
                     Vector3 down = vertices[first + lower] - vertices[first + upper];
                     Vector3 normal = (reverse ? Vector3.Cross(down, along) : Vector3.Cross(along, down)).normalized;
@@ -443,7 +625,7 @@ namespace TiltBrush
                     float tangentSign = Vector3.Dot(Vector3.Cross(normal, tangent), down) < 0f ? -1f : 1f;
                     SetTangent(first, row, tangent, tangentSign);
                     if (station == count - 1 || row == rowCount - 1 ||
-                        (pool && row == kCopingStart - 1) || (steelWall && row == tubeStart - 1))
+                        (deck && row == copingStart - 1) || (steelWall && row == tubeStart - 1))
                         continue;
                     // The last ring has the same positions as the first ring of a loop, with its own UVs.
                     int nextFirst = first + rowCount;
@@ -514,6 +696,8 @@ namespace TiltBrush
                     nearestDistance = distance;
                 }
             }
+            if (AutoOrient)
+                return StationTangent(nearest, m_ClosedSweep);
             Vector3? fixedHeading = StrokeOrientation is Quaternion orientation ? HorizontalHeading(orientation) : null;
             return GetStationHeading(nearest, TracksController, m_StrokeData != null && HasHeadingOffsets(m_StrokeData),
                 fixedHeading);

@@ -271,8 +271,7 @@ namespace TiltBrush
         }
 
         // TODO Find a better home for this
-        // Accepts either guid or "Description"
-        // Description is matched based on removing all non-alphanumeric characters and lower-casing
+        // Accepts a GUID, display name, or durable name. Name matching ignores case and punctuation.
         public static BrushDescriptor LookupBrushDescriptor(string brushType)
         {
             if (brushType == null) return null;
@@ -293,8 +292,9 @@ namespace TiltBrush
 
                 try
                 {
-                    brushDescriptor = BrushCatalog.m_Instance.AllBrushes
-                        .First(x => AlphaNumericLowerCased(x.Description) == brushType);
+                    var brushes = BrushCatalog.m_Instance.AllBrushes;
+                    brushDescriptor = brushes.FirstOrDefault(x => AlphaNumericLowerCased(x.Description) == brushType)
+                        ?? brushes.First(x => AlphaNumericLowerCased(x.DurableName) == brushType);
                 }
                 catch (InvalidOperationException)
                 {

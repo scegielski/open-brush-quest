@@ -40,6 +40,50 @@ namespace TiltBrush
     // I am so sorry about these class names.
     internal class TestMathUtils : MathTestUtils
     {
+        [Test]
+        public void GridCalibrationTwoGripsRotateAroundFixedOrigin()
+        {
+            var initial = TrTransform.TRS(new Vector3(2, 1, 3), Quaternion.Euler(0, 15, 0), 2f);
+            var brushBefore = new Vector3(-1, 2, 0);
+            var wandBefore = new Vector3(1, 2, 0);
+            var brushAfter = new Vector3(3, 4, 6);
+            var wandAfter = new Vector3(3, 4, 2);
+
+            var calibrated = SketchControlsScript.UpdateCalibrationPose(initial,
+                brushBefore, wandBefore, brushAfter, wandAfter);
+
+            Assert.That(calibrated.scale, Is.EqualTo(1f));
+            Assert.That(calibrated.translation, Is.EqualTo(initial.translation));
+            Assert.That(Quaternion.Angle(calibrated.rotation, Quaternion.Euler(0, 105, 0)), Is.LessThan(0.05f));
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void GridCalibrationOneGripOnlyTranslates(bool brush)
+        {
+            var initial = TrTransform.TR(new Vector3(2, 1, 3), Quaternion.Euler(0, 45, 0));
+            var before = new Vector3(-1, 2, 0);
+            var after = new Vector3(3, 4, 6);
+            var calibrated = SketchControlsScript.UpdateCalibrationPose(initial,
+                brush ? before : null, brush ? null : before, brush ? after : null, brush ? null : after);
+
+            Assert.That(calibrated.scale, Is.EqualTo(1f));
+            Assert.That(calibrated.translation, Is.EqualTo(new Vector3(6, 3, 9)));
+            Assert.That(calibrated.rotation, Is.EqualTo(initial.rotation));
+        }
+
+        [Test]
+        public void GridCalibrationRebasesWhenGripsChange()
+        {
+            var initial = TrTransform.TR(new Vector3(2, 1, 3), Quaternion.Euler(0, 15, 0));
+            var first = new Vector3(1, 2, 3);
+            var second = new Vector3(4, 5, 6);
+            Assert.That(SketchControlsScript.UpdateCalibrationPose(initial, null, null, first, null), Is.EqualTo(initial));
+            Assert.That(SketchControlsScript.UpdateCalibrationPose(initial, first, null, second, first), Is.EqualTo(initial));
+            Assert.That(SketchControlsScript.UpdateCalibrationPose(initial, first, second, second, null), Is.EqualTo(initial));
+            Assert.That(SketchControlsScript.UpdateCalibrationPose(initial, first, null, null, second), Is.EqualTo(initial));
+        }
+
         [TestCase(1, 11, 0)] // Result is -period
         [TestCase(0, 8, 2)]  // Result in (-period, -period/2)
         [TestCase(2, 7, -5)] // Result is -period/2

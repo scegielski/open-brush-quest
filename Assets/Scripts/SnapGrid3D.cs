@@ -21,7 +21,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-using System;
 using TiltBrush;
 using UnityEngine;
 
@@ -42,6 +41,11 @@ public class SnapGrid3D : MonoBehaviour
         public static readonly int CanvasScale = Shader.PropertyToID("_CanvasScale");
     }
 
+    private static readonly int kFloorGrid = Shader.PropertyToID("_FloorGrid");
+    private static readonly int kFloorHeight = Shader.PropertyToID("_FloorHeight");
+    private const float kFloorViewRadius = 4.5f * App.METERS_TO_UNITS;
+    private const float kFloorLineWidth = 0.004f * App.METERS_TO_UNITS;
+
     public Material material;
     public Color color;
     public Vector3Int gridCount = Vector3Int.one * 5;
@@ -52,9 +56,13 @@ public class SnapGrid3D : MonoBehaviour
     private Transform toolTransform;
     private Transform canvasTransform;
     private MaterialPropertyBlock materialProperties;
+    private MaterialPropertyBlock floorProperties;
 
     private void LateUpdate()
     {
+        if (!Application.isPlaying || App.Instance == null || !App.Instance.IsInStateThatAllowsPainting())
+            return;
+
         var currentTool = SketchSurfacePanel.m_Instance.ActiveTool;
         if (currentTool is StrokeModificationTool)
         {
@@ -71,6 +79,7 @@ public class SnapGrid3D : MonoBehaviour
         }
 
         canvasTransform = App.Scene.ActiveCanvas.transform;
+        float floorHeight = App.Scene.FloorHeightCanvasUnits;
 
         materialProperties ??= new MaterialPropertyBlock();
         materialProperties.SetMatrix(ShaderParam.CanvasToWorldMatrix, canvasTransform.localToWorldMatrix);
@@ -82,6 +91,7 @@ public class SnapGrid3D : MonoBehaviour
         materialProperties.SetFloat(ShaderParam.GridInterval, gridInterval);
         materialProperties.SetFloat(ShaderParam.LineWidth, lineWidth);
         materialProperties.SetFloat(ShaderParam.LineLength, lineLength);
+        materialProperties.SetFloat(kFloorHeight, floorHeight);
         materialProperties.SetFloat(ShaderParam.CanvasScale,
             canvasTransform.lossyScale.x); // Presumed always uniform
 
@@ -101,5 +111,39 @@ public class SnapGrid3D : MonoBehaviour
             worldBounds = new Bounds(toolTransform.position, Vector3.one * boundsSize),
         };
         Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, vertexCount);
+
+        RenderFloorGrid(canvasScale, floorHeight);
+    }
+
+    private void RenderFloorGrid(float canvasScale, float floorHeight)
+    {
+        var selection = SelectionManager.m_Instance;
+        bool snapX = selection.m_EnableSnapTranslationX;
+        bool snapZ = selection.m_EnableSnapTranslationZ;
+        int axes = (snapX ? 1 : 0) | (snapZ ? 2 : 0);
+        if (axes == 0 || gridInterval <= 0f || canvasScale <= 0f)
+            return;
+
+        float halfWidth = kFloorViewRadius / canvasScale;
+        Vector3 center = canvasTransform.InverseTransformPoint(ViewpointScript.Head.position);
+        center.y = floorHeight;
+
+        floorProperties ??= new MaterialPropertyBlock();
+        floorProperties.SetMatrix(ShaderParam.CanvasToWorldMatrix, canvasTransform.localToWorldMatrix);
+        floorProperties.SetFloat(ShaderParam.GridInterval, gridInterval);
+        floorProperties.SetFloat(kFloorHeight, floorHeight);
+        floorProperties.SetFloat(ShaderParam.LineWidth, Mathf.Min(kFloorLineWidth / canvasScale, gridInterval * 0.12f));
+        float alpha = color.a * 0.54f;
+        floorProperties.SetColor(ShaderParam.Color, new Color(color.r * alpha, color.g * alpha, color.b * alpha, alpha));
+        floorProperties.SetVector(kFloorGrid, new Vector4(center.x, center.z, halfWidth, axes));
+
+        float boundsWidth = kFloorViewRadius * (2f * Mathf.Sqrt(2f));
+        var renderParams = new RenderParams(material)
+        {
+            layer = gameObject.layer,
+            matProps = floorProperties,
+            worldBounds = new Bounds(canvasTransform.TransformPoint(center), Vector3.one * boundsWidth),
+        };
+        Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6);
     }
 }

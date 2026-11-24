@@ -39,6 +39,30 @@ namespace TiltBrush
             stroke.m_SplineKnotCount <= MaxKnots &&
             stroke.m_ControlPoints?.Length == GetSampleCount(stroke.m_SplineKnotCount, closed: true);
 
+        internal static bool AutoOrients(StrokeData stroke) =>
+            stroke != null && (stroke.m_Flags & SketchMemoryScript.StrokeFlags.SplineAutoOrient) != 0;
+
+        internal static Quaternion GetAutoOrientation(IReadOnlyList<TrTransform> samples, int index, bool closed)
+        {
+            int last = samples.Count - 1;
+            if (last < 1)
+                return samples[index].rotation;
+            int previous = index == 0 && closed ? last - 1 : Mathf.Max(0, index - 1);
+            int next = index == last && closed ? 1 : Mathf.Min(last, index + 1);
+            Vector3 position = samples[index].translation;
+            Vector3 incoming = (position - samples[previous].translation).normalized;
+            Vector3 outgoing = (samples[next].translation - position).normalized;
+            Vector3 tangent = (incoming + outgoing).normalized;
+            if (tangent == Vector3.zero)
+                tangent = outgoing == Vector3.zero ? incoming : outgoing;
+            if (tangent == Vector3.zero)
+                return samples[index].rotation;
+
+            Vector3 up = Mathf.Abs(Vector3.Dot(tangent, Vector3.up)) > 0.999f
+                ? Vector3.forward : Vector3.up;
+            return Quaternion.LookRotation(tangent, up);
+        }
+
         internal static int GetSampleCount(int knotCount, bool closed) =>
             1 + (closed ? knotCount : knotCount - 1) * SamplesPerSegment;
 

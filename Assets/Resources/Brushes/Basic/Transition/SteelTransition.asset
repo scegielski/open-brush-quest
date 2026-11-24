@@ -33,7 +33,7 @@ MonoBehaviour:
     m_FallbackState: 0
     m_WaitForCompletion: 0
     m_LocalVariables: []
-  m_DescriptionExtra: Sweep a concrete transition with a reflective 2-inch steel coping tube.
+  m_DescriptionExtra: Sweep a concrete transition with a reflective 2-inch steel coping tube and an adjustable deck.
   m_BrushAudioLayers:
   - {fileID: 8300000, guid: 103bfb4f4d70ddc4e8ca851eda9568f2, type: 3}
   - {fileID: 8300000, guid: c7079dc05177e3944bed833a35ba7563, type: 3}

@@ -1,26 +1,22 @@
 // Copyright 2026 The Open Brush Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
+using Unity.XR.CoreUtils;
 
 namespace TiltBrush
 {
     public partial class FreePaintTool
     {
-        private readonly Vector3[] m_TransitionPreviewPoints = new Vector3[TransitionBrush.ProfilePoints];
-        private readonly Vector3[] m_ConcretePreviewPoints = new Vector3[TransitionBrush.WallPoints];
-        private readonly Vector3[] m_SteelPreviewPoints = new Vector3[TransitionBrush.WallPoints + TransitionBrush.TubePoints];
+        private Vector3[] m_TransitionPreviewPoints = new Vector3[TransitionBrush.ProfilePoints];
         private LineRenderer m_TransitionPreviewLine;
         private Material m_TransitionPreviewMaterial;
-        private TextMeshPro m_TransitionReadout;
-        private Material m_TransitionLabelMaterial;
-        private int m_PreviewRadiusInches;
-        private int m_PreviewHeightInches;
-        private int m_PreviewQuarterTurns;
-        private int m_PreviewDeckDepthInches;
-        private TransitionBrush.SweepStyle m_PreviewStyle;
+        private TextMeshPro m_TransitionHeightLabel;
+        private Material m_TransitionHeightLabelMaterial;
+        private int m_PreviewHeightHalfInches = -1;
         private CanvasScript m_PreviewCanvas;
         private CanvasScript m_TransitionSampleCanvas;
         private int m_TransitionSampleFrame = -1;
@@ -35,15 +31,33 @@ namespace TiltBrush
             if (m_PreviewCanvas == canvas && m_TransitionPreviewLine != null &&
                 m_TransitionPreviewLine.gameObject.activeInHierarchy)
                 return m_DisplayedTransitionOrientation;
-            return TransitionBrush.HorizontalOrientation(fallback);
+            return SnapTransitionAngle(TransitionBrush.HorizontalOrientation(fallback), canvas);
         }
 
-        internal Quaternion SampleTransitionOrientation(CanvasScript canvas, Quaternion fallback)
+        private Quaternion SnapTransitionAngle(Quaternion heading, CanvasScript canvas)
+        {
+            if (SelectionManager.m_Instance == null || SelectionManager.m_Instance.CurrentSnapAngleIndex == 0)
+                return heading;
+            int turns = UsesSplinePreview && m_SplineCanvas == canvas
+                ? (SplineEditData != null
+                    ? TransitionBrush.QuarterTurnsFromFlags(SplineEditData.m_Flags) : DraftSplineQuarterTurns)
+                : (PointerManager.m_Instance.MainPointer.CurrentBrushScript as TransitionBrush)?.QuarterTurns
+                    ?? TransitionBrush.PreferredQuarterTurns;
+            // Snap the actual direction of the sweep, including the thumbstick orientation.
+            Quaternion across = Quaternion.AngleAxis(90f * (turns + 1), Vector3.up);
+            Quaternion snapped = SnapBrushAngle(heading * across, canvas.Pose.rotation);
+            return TransitionBrush.HorizontalOrientation(snapped * Quaternion.Inverse(across));
+        }
+
+        internal Quaternion SampleTransitionOrientation(CanvasScript canvas, Quaternion fallback, bool snap = true)
         {
             bool sameCanvas = m_TransitionSampleCanvas == canvas;
             int frame = Time.frameCount;
             if (sameCanvas && m_TransitionSampleFrame == frame)
-                return Quaternion.Euler(0f, m_TransitionSampleYaw, 0f);
+            {
+                Quaternion cached = Quaternion.Euler(0f, m_TransitionSampleYaw, 0f);
+                return snap ? SnapTransitionAngle(cached, canvas) : cached;
+            }
 
             Transform attachment = InputManager.m_Instance?.GetBrushControllerAttachPoint();
             Quaternion raw = attachment != null
@@ -64,17 +78,21 @@ namespace TiltBrush
             }
             m_TransitionSampleCanvas = canvas;
             m_TransitionSampleFrame = frame;
-            return Quaternion.Euler(0f, m_TransitionSampleYaw, 0f);
+            Quaternion smoothed = Quaternion.Euler(0f, m_TransitionSampleYaw, 0f);
+            return snap ? SnapTransitionAngle(smoothed, canvas) : smoothed;
         }
 
         internal void UpdateTransitionPreview(PointerScript pointer, Transform parent)
         {
-            bool painting = App.Instance != null && App.Instance.IsInStateThatAllowsPainting();
+            bool painting = App.Instance != null && App.Instance.IsInStateThatAllowsPainting() &&
+                SketchControlsScript.m_Instance?.GridCalibrationActive != true;
             Camera camera = painting && App.VrSdk != null ? App.VrSdk.GetVrCamera() : null;
             var canvas = painting ? App.ActiveCanvas : null;
             bool spline = canvas != null && UsesSplinePreview && m_SplineCanvas == canvas;
+            if (spline && SketchSurfacePanel.m_Instance.ActiveTool == this)
+                UpdateDraftTransitionDimensions();
             var editedTransition = spline ? SplineEditData : null;
-            var descriptor = editedTransition != null ? m_SplineEditBrush : pointer?.CurrentBrush;
+            var descriptor = spline ? SplineBrush : pointer?.CurrentBrush;
             bool transition = TransitionBrush.IsTransition(descriptor);
             if (!transition || canvas == null || camera == null)
             {
@@ -101,12 +119,15 @@ namespace TiltBrush
             Quaternion? knotOrientation = null;
             int knotIndex = m_DraggedSplineKnot >= 0 ? m_DraggedSplineKnot :
                 (m_SplineAction is SplineAction.MoveAndRotate or SplineAction.DeckDepth ? m_HoveredSplineKnot : -1);
-            int deckDepth = TransitionBrush.DefaultDeckDepthInches;
+            var options = spline ? SplineSurfaceOptions : TransitionBrush.OptionsFor(descriptor);
+            float deckDepth = editedTransition != null
+                ? SelectedSplineDeckDepthInches
+                : spline ? DraftSplineDeckDepth : brush?.NewStrokeDeckDepthInches ?? TransitionBrush.DeckDepthInches;
             if (spline && knotIndex >= 0 && knotIndex < m_SplineKnots.Count)
             {
                 TrTransform knot = m_SplineKnots[knotIndex];
                 coping = knot.translation;
-                deckDepth = Mathf.RoundToInt(KnotDeckDepthInches(knotIndex));
+                deckDepth = KnotDeckDepthInches(knotIndex);
                 if (SplineTracksTransitionHeading)
                     knotOrientation = knot.rotation;
                 else if (SplineUsesHeadingOffsets && m_SavedSplinePreviewBrush is TransitionBrush savedPreview)
@@ -122,127 +143,167 @@ namespace TiltBrush
             m_TransitionHeadingTracked |= knotOrientation.HasValue && m_DraggedSplineKnot >= 0;
             m_PreviewCanvas = canvas;
             m_TransitionHeadingLocked = lockedOrientation.HasValue;
+
+            // Keep the draft and controller heading up to date while the panel has the laser.
+            if (SketchControlsScript.m_Instance?.IsBrushPointingAtPanel() == true)
+            {
+                HideTransitionPreviewRenderers();
+                m_TransitionPreviewStatus = "Hidden while pointing at a panel";
+                return;
+            }
+
             Vector3 heading = m_DisplayedTransitionOrientation * Vector3.forward;
-            int inches = editedTransition == null ? TransitionBrush.RadiusInches :
-                Mathf.Max(1, Mathf.RoundToInt(
-                    editedTransition.m_BrushSize * editedTransition.m_BrushScale / TransitionBrush.UnitsPerInch));
+            float inches = editedTransition == null ?
+                (spline ? DraftSplineRadiusInches : TransitionBrush.RadiusInches) :
+                Mathf.Max(TransitionBrush.MinRadiusInches,
+                    editedTransition.m_BrushSize * editedTransition.m_BrushScale / TransitionBrush.UnitsPerInch);
             int turns = editedTransition != null ? TransitionBrush.QuarterTurnsFromFlags(editedTransition.m_Flags) :
-                brush != null ? brush.QuarterTurns : TransitionBrush.PreferredQuarterTurns;
+                spline ? DraftSplineQuarterTurns : brush?.QuarterTurns ?? TransitionBrush.PreferredQuarterTurns;
+            if (spline && SplineAutoOrientEnabled)
+            {
+                turns &= 2;
+                if (m_SplineSamples.Count > 1)
+                {
+                    int sample = knotIndex >= 0
+                        ? Mathf.Min(knotIndex * SplineCurve.SamplesPerSegment, m_SplineSamples.Count - 1)
+                        : editedTransition != null ? NearestTransitionPreviewSample(coping) : m_SplineSamples.Count - 1;
+                    Vector3 tangent = SplineCurve.GetAutoOrientation(m_SplineSamples, sample, m_SplineClosed) *
+                        Vector3.forward;
+                    tangent.y = 0f;
+                    if (tangent.sqrMagnitude > 1e-6f)
+                        heading = tangent.normalized;
+                }
+            }
             float deckScale = editedTransition?.m_BrushScale ??
                 (spline ? 1f : brush?.POINTER_TO_LOCAL ?? canvasFromRoom.scale);
-            DrawTransitionPreview(roomFromCanvas, coping, heading, camera, inches, turns, parent, deckDepth, deckScale,
-                TransitionBrush.StyleFor(descriptor));
+            DrawTransitionPreview(roomFromCanvas, coping, heading, inches, turns, options, parent, deckDepth,
+                deckScale, camera.transform, App.Scene.FloorHeightCanvasUnits);
+        }
+
+        private int NearestTransitionPreviewSample(Vector3 position)
+        {
+            float closestDistance = float.PositiveInfinity;
+            int closest = 0;
+            for (int i = 0; i < m_SplineSamples.Count; i++)
+            {
+                float distance = (position - m_SplineSamples[i].translation).sqrMagnitude;
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closest = i;
+                }
+            }
+            return closest;
         }
 
         internal void DrawTransitionPreview(TrTransform roomFromCanvas, Vector3 coping, Vector3 heading,
-            Camera camera, int inches, int quarterTurns, Transform parent = null,
-            int deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f,
-            TransitionBrush.SweepStyle style = TransitionBrush.SweepStyle.PoolTransition)
+            float inches, int quarterTurns, Transform parent = null,
+            float deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f,
+            TransitionBrush.SweepStyle style = TransitionBrush.SweepStyle.PoolTransition, Transform viewer = null,
+            float floorHeight = 0f) =>
+            DrawTransitionPreview(roomFromCanvas, coping, heading, inches, quarterTurns,
+                TransitionBrush.OptionsFor(style), parent, deckDepthInches, deckScale, viewer, floorHeight);
+
+        internal void DrawTransitionPreview(TrTransform roomFromCanvas, Vector3 coping, Vector3 heading,
+            float inches, int quarterTurns, TransitionBrush.SurfaceOptions options, Transform parent = null,
+            float deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f, Transform viewer = null,
+            float floorHeight = 0f)
         {
+            float height = coping.y - floorHeight;
+            if (height <= 0f)
+            {
+                HideTransitionPreviewRenderers();
+                m_TransitionPreviewStatus = "Tip at or below the sketch floor";
+                return;
+            }
+
             if (m_TransitionPreviewLine == null)
                 CreateTransitionPreview(parent != null ? parent : transform);
             m_TransitionPreviewLine.gameObject.SetActive(true);
             float radius = inches * TransitionBrush.UnitsPerInch;
-            bool hasDeck = style == TransitionBrush.SweepStyle.PoolTransition;
-            float deckDepth = hasDeck ? deckDepthInches * TransitionBrush.UnitsPerInch * deckScale : 0f;
-            var points = style switch
+            float deckDepth = options.Deck ? deckDepthInches * TransitionBrush.UnitsPerInch * deckScale : 0f;
+            bool poolCoping = options.Coping == TransitionBrush.CopingKind.Pool;
+            Array.Resize(ref m_TransitionPreviewPoints, TransitionBrush.PreviewPointCount(options, deckDepth));
+            Vector3 across = TransitionBrush.Across(heading, quarterTurns);
+            var profile = new TransitionBrush.SurfaceProfile(height, radius, deckDepth, poolCoping);
+            for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
             {
-                TransitionBrush.SweepStyle.SteelTransition => m_SteelPreviewPoints,
-                TransitionBrush.SweepStyle.ConcreteTransition => m_ConcretePreviewPoints,
-                _ => m_TransitionPreviewPoints
-            };
-            bool belowFloor = coping.y <= 0f;
-            Vector3 tip = roomFromCanvas * coping;
-            Transform head = camera.transform;
-            Vector3 labelViewport = camera.WorldToViewportPoint(tip + head.up * 1.45f);
-            bool labelInView = InPreviewView(labelViewport, camera.nearClipPlane, 0.28f);
-            bool profileInView = false;
-            if (!belowFloor)
-            {
-                Vector3 across = TransitionBrush.Across(heading, quarterTurns);
-                var profile = new TransitionBrush.SurfaceProfile(coping.y, radius, deckDepth, hasDeck);
-                for (int row = 0; row < points.Length; row++)
-                {
-                    Vector2 sample = TransitionBrush.PreviewPoint(style, profile, row, coping.y, deckScale);
-                    points[row] = roomFromCanvas *
-                        (new Vector3(coping.x, sample.y, coping.z) + across * sample.x);
-                    if (!profileInView)
-                        profileInView = InPreviewView(camera.WorldToViewportPoint(points[row]),
-                            camera.nearClipPlane, 0.06f);
-                }
+                Vector2 sample = TransitionBrush.PreviewPoint(options, profile, row, height, deckScale, deckDepth);
+                m_TransitionPreviewPoints[row] = roomFromCanvas *
+                    (new Vector3(coping.x, sample.y + floorHeight, coping.z) + across * sample.x);
             }
+            m_TransitionPreviewLine.positionCount = m_TransitionPreviewPoints.Length;
+            m_TransitionPreviewLine.SetPositions(m_TransitionPreviewPoints);
+            m_TransitionPreviewLine.enabled = true;
+            UpdateTransitionHeightLabel(roomFromCanvas, coping, height, viewer);
 
-            // Keep the readout reachable when the drawing controller starts offscreen or on the floor.
-            // The smaller cross section in that case uses the same profile, scaled to fit beside the readout.
-            if (!labelInView || !profileInView)
-            {
-                if (labelViewport.z <= camera.nearClipPlane)
-                    labelViewport = new Vector3(0.5f, 0.44f, 6f);
-                labelViewport.x = Mathf.Clamp(labelViewport.x, 0.28f, 0.72f);
-                labelViewport.y = Mathf.Clamp(labelViewport.y, profileInView ? 0.24f : 0.44f, 0.81f);
-            }
-            Vector3 labelPosition = camera.ViewportToWorldPoint(labelViewport);
-            float readoutScale = Mathf.Clamp(Vector3.Distance(labelPosition, head.position) / 5f, 0.7f, 2.5f);
-            m_TransitionPreviewLine.widthMultiplier = profileInView ? 0.11f : 0.08f * readoutScale;
-            if (!profileInView)
-            {
-                float profileHeight = belowFloor ? radius : coping.y;
-                float scale = 1.5f * readoutScale / Mathf.Max(radius + deckDepth, profileHeight);
-                Vector3 right = head.right * (quarterTurns >= 2 ? -1f : 1f);
-                Vector3 origin = labelPosition - head.up * (2.8f * readoutScale);
-                var profile = new TransitionBrush.SurfaceProfile(profileHeight, radius, deckDepth, hasDeck);
-                float center = (TransitionBrush.PreviewPoint(style, profile, 0, profileHeight, deckScale).x +
-                    profile.Sample(TransitionBrush.ProfilePoints - 1, out _).x) * 0.5f;
-                for (int row = 0; row < points.Length; row++)
-                {
-                    Vector2 sample = TransitionBrush.PreviewPoint(style, profile, row, profileHeight, deckScale);
-                    points[row] = origin + scale * ((sample.x - center) * right + sample.y * head.up);
-                }
-            }
-            m_TransitionPreviewLine.positionCount = points.Length;
-            m_TransitionPreviewLine.SetPositions(points);
-
-            int heightInches = Mathf.RoundToInt(coping.y / TransitionBrush.UnitsPerInch);
-            if (m_PreviewRadiusInches != inches || m_PreviewHeightInches != heightInches ||
-                m_PreviewQuarterTurns != quarterTurns || m_PreviewDeckDepthInches != deckDepthInches ||
-                m_PreviewStyle != style)
-            {
-                m_PreviewRadiusInches = inches;
-                m_PreviewHeightInches = heightInches;
-                m_PreviewQuarterTurns = quarterTurns;
-                m_PreviewDeckDepthInches = deckDepthInches;
-                m_PreviewStyle = style;
-                m_TransitionReadout.text =
-                    $"Radius {TransitionBrush.FormatFeetAndInches(inches)}\n" +
-                    $"Height {TransitionBrush.FormatFeetAndInches(heightInches)}\n" +
-                    $"Orientation {quarterTurns * 90}°";
-                if (hasDeck)
-                    m_TransitionReadout.text += $"\nDeck Depth {TransitionBrush.FormatFeetAndInches(deckDepthInches)}";
-            }
-            Transform label = m_TransitionReadout.transform;
-            label.SetPositionAndRotation(labelPosition, Quaternion.LookRotation(labelPosition - head.position, head.up));
-            label.localScale = Vector3.one * (readoutScale / label.parent.lossyScale.x);
-            m_TransitionPreviewStatus = profileInView ? "Full-size floor profile" :
-                (belowFloor ? "Compact profile, tip below sketch floor" : "Compact profile, floor profile outside view");
+            m_TransitionPreviewStatus = "Full-size floor profile";
         }
 
-        private static bool InPreviewView(Vector3 point, float nearClip, float margin) =>
-            point.z > nearClip && point.x > margin && point.x < 1f - margin &&
-            point.y > margin && point.y < 1f - margin;
+        private void HideTransitionPreviewRenderers()
+        {
+            if (m_TransitionPreviewLine != null)
+                m_TransitionPreviewLine.enabled = false;
+            if (m_TransitionHeightLabel != null)
+                m_TransitionHeightLabel.renderer.enabled = false;
+        }
+
+        private void UpdateTransitionHeightLabel(TrTransform roomFromCanvas, Vector3 coping, float height, Transform viewer)
+        {
+            if (viewer == null)
+            {
+                if (m_TransitionHeightLabel != null)
+                    m_TransitionHeightLabel.renderer.enabled = false;
+                return;
+            }
+
+            if (m_TransitionHeightLabel == null)
+                CreateTransitionHeightLabel();
+            int heightHalfInches = Mathf.RoundToInt(2f * height / TransitionBrush.UnitsPerInch);
+            if (heightHalfInches != m_PreviewHeightHalfInches)
+            {
+                m_PreviewHeightHalfInches = heightHalfInches;
+                m_TransitionHeightLabel.text = $"Height {TransitionBrush.FormatFeetAndInches(heightHalfInches * 0.5f)}";
+            }
+
+            const float offsetMeters = 0.08f;
+            Vector3 position = roomFromCanvas * coping + Vector3.up * (offsetMeters * App.METERS_TO_UNITS);
+            Vector3 awayFromViewer = position - viewer.position;
+            Quaternion rotation = awayFromViewer.sqrMagnitude > 1e-6f
+                ? Quaternion.LookRotation(awayFromViewer, viewer.up) : viewer.rotation;
+            Transform label = m_TransitionHeightLabel.transform;
+            label.SetPositionAndRotation(position, rotation);
+            label.localScale = Vector3.one / label.parent.lossyScale.x;
+            m_TransitionHeightLabel.renderer.enabled = true;
+        }
 
         internal string DescribeTransitionPreview()
         {
-            if (m_TransitionPreviewLine == null || !m_TransitionPreviewLine.gameObject.activeInHierarchy)
-                return m_TransitionPreviewStatus;
-
             Camera camera = App.VrSdk.GetVrCamera();
+            var origin = camera.GetComponentInParent<XROrigin>();
+            var canvas = App.ActiveCanvas;
+            float floorY = canvas != null
+                ? (canvas.Pose * (Vector3.up * App.Scene.FloorHeightCanvasUnits)).y : 0f;
+            var snap = SelectionManager.m_Instance;
+            var controls = SketchControlsScript.m_Instance;
+            string floor = (origin != null
+                ? $", tracking origin={origin.CurrentTrackingOriginMode}, " +
+                    $"camera offset={origin.CameraFloorOffsetObject.transform.localPosition.y:F2}m"
+                : "") + (canvas != null
+                ? $", sketch floor={floorY * App.UNITS_TO_METERS:F2}m, sketch scale={canvas.Pose.scale:F2}"
+                : "") + (snap != null
+                ? $", grid snap={snap.SnappingGridSize / TransitionBrush.UnitsPerInch:F1}in, angle snap={snap.SnappingAngle:F0}°"
+                : "") + (controls != null
+                ? $", world lock={controls.IsWorldCalibrationLocked}, calibration={controls.GridCalibrationActive}"
+                : "");
+            if (m_TransitionPreviewLine == null || !m_TransitionPreviewLine.gameObject.activeInHierarchy)
+                return m_TransitionPreviewStatus + floor;
+
             var line = m_TransitionPreviewLine;
-            var label = m_TransitionReadout;
             return $"{m_TransitionPreviewStatus}, camera layer={(camera.cullingMask & (1 << line.gameObject.layer)) != 0}, " +
-                $"line={line.enabled}, label={label.renderer.enabled}, text={label.text.Replace("\n", " / ")}, " +
+                $"line={line.enabled}, " +
                 $"heading={m_DisplayedTransitionOrientation.eulerAngles.y:F1}°, tracking={m_TransitionHeadingTracked}, " +
-                $"locked={m_TransitionHeadingLocked}, " +
-                $"readout viewport={camera.WorldToViewportPoint(label.transform.position):F3}";
+                $"locked={m_TransitionHeadingLocked}" + floor;
         }
 
         private void CreateTransitionPreview(Transform parent)
@@ -250,47 +311,47 @@ namespace TiltBrush
             var root = new GameObject("Transition profile preview");
             root.layer = gameObject.layer;
             root.transform.SetParent(parent, false);
-            m_TransitionPreviewMaterial = new Material(m_BimanualGuideLine.GetComponent<Renderer>().sharedMaterial);
-            m_TransitionPreviewMaterial.SetColor("_Color", new Color(0.16f, 0.72f, 0.86f));
-            m_TransitionPreviewMaterial.SetFloat("_Cull", (float)CullMode.Off);
-            m_TransitionPreviewMaterial.SetFloat("_ZTest", (float)CompareFunction.Always);
-            m_TransitionPreviewMaterial.SetFloat("_ZWrite", 0f);
-            m_TransitionPreviewMaterial.renderQueue = (int)RenderQueue.Overlay;
+            var shader = Resources.Load<Shader>("Brushes/Basic/Transition/TransitionPreviewLine");
+            m_TransitionPreviewMaterial = new Material(shader);
             m_TransitionPreviewLine = root.AddComponent<LineRenderer>();
             m_TransitionPreviewLine.useWorldSpace = true;
             m_TransitionPreviewLine.positionCount = m_TransitionPreviewPoints.Length;
             m_TransitionPreviewLine.startWidth = 1f;
             m_TransitionPreviewLine.endWidth = 1f;
+            m_TransitionPreviewLine.widthMultiplier = 0.055f;
+            // Tiled UVs are in world units. Repeat the dash pattern every 8 cm.
+            const float dashSpacingMeters = 0.08f;
+            m_TransitionPreviewLine.textureMode = LineTextureMode.Tile;
+            m_TransitionPreviewLine.textureScale = new Vector2(1f / (dashSpacingMeters * App.METERS_TO_UNITS), 1f);
             m_TransitionPreviewLine.numCapVertices = 3;
             m_TransitionPreviewLine.sharedMaterial = m_TransitionPreviewMaterial;
             m_TransitionPreviewLine.shadowCastingMode = ShadowCastingMode.Off;
             m_TransitionPreviewLine.receiveShadows = false;
             m_TransitionPreviewLine.allowOcclusionWhenDynamic = false;
-
-            var label = new GameObject("Transition measurements");
-            label.layer = root.layer;
-            label.transform.SetParent(root.transform, false);
-            m_TransitionReadout = label.AddComponent<TextMeshPro>();
-            m_TransitionReadout.alignment = TextAlignmentOptions.Center;
-            m_TransitionReadout.color = Color.white;
-            m_TransitionReadout.fontSize = 3.6f;
-            m_TransitionReadout.textWrappingMode = TextWrappingModes.NoWrap;
-            m_TransitionLabelMaterial = CreateTransitionOverlayTextMaterial(m_TransitionReadout);
         }
 
-        private static Material CreateTransitionOverlayTextMaterial(TextMeshPro label)
+        private void CreateTransitionHeightLabel()
         {
-            var reference = Resources.Load<Material>("Brushes/Basic/Transition/TransitionOverlayText");
-            // Keep the configured font atlas while switching its renderer to the always-visible shader.
-            var material = new Material(label.fontSharedMaterial) { shader = reference.shader };
-            material.renderQueue = (int)RenderQueue.Overlay + 1;
-            material.SetColor(ShaderUtilities.ID_OutlineColor, Color.black);
-            material.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.12f);
-            label.fontSharedMaterial = material;
-            label.renderer.shadowCastingMode = ShadowCastingMode.Off;
-            label.renderer.receiveShadows = false;
-            label.renderer.allowOcclusionWhenDynamic = false;
-            return material;
+            var labelObject = new GameObject("Transition height");
+            labelObject.layer = m_TransitionPreviewLine.gameObject.layer;
+            labelObject.transform.SetParent(m_TransitionPreviewLine.transform, false);
+            m_TransitionHeightLabel = labelObject.AddComponent<TextMeshPro>();
+            m_TransitionHeightLabel.alignment = TextAlignmentOptions.Center;
+            m_TransitionHeightLabel.color = Color.white;
+            m_TransitionHeightLabel.fontSize = 4.2f;
+            m_TransitionHeightLabel.textWrappingMode = TextWrappingModes.NoWrap;
+
+            var overlay = Resources.Load<Material>("Brushes/Basic/Transition/TransitionOverlayText");
+            // Keep the font's SDF atlas and metrics with an always-on-top shader.
+            m_TransitionHeightLabelMaterial = new Material(m_TransitionHeightLabel.fontSharedMaterial)
+                { shader = overlay.shader };
+            m_TransitionHeightLabelMaterial.renderQueue = (int)RenderQueue.Overlay + 1;
+            m_TransitionHeightLabelMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.black);
+            m_TransitionHeightLabelMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.12f);
+            m_TransitionHeightLabel.fontSharedMaterial = m_TransitionHeightLabelMaterial;
+            m_TransitionHeightLabel.renderer.shadowCastingMode = ShadowCastingMode.Off;
+            m_TransitionHeightLabel.renderer.receiveShadows = false;
+            m_TransitionHeightLabel.renderer.allowOcclusionWhenDynamic = false;
         }
     }
 }

@@ -15,6 +15,7 @@ MonoBehaviour:
   m_Guid:
     m_storage: e5360d58-d8d8-4dce-a3c9-c829e104ad4b
   m_DurableName: Transition
+  m_DisplayName: Transition with Tile and Pool Coping
   m_CreationVersion: 16.0
   m_ShaderVersion: 10.0
   m_BrushPrefab: {fileID: 100000, guid: 36a2d0b36eec49eb85031b0caff07f93, type: 3}

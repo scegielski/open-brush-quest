@@ -40,19 +40,24 @@ namespace TiltBrush
 
         private readonly List<TrTransform> m_Samples = new();
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void SplineModePressWaitsForReleaseAndDisarmsDuringDrawing(bool interrupted)
+        [Test]
+        public void AutoOrientationFollowsTheTangentAndMatchesAtTheLoopSeam()
         {
-            bool armed = false;
-            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, true, false), Is.False);
-            for (int frame = 0; frame < 100; frame++)
-                Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, false), Is.False);
-            if (interrupted)
-                Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, false, false, false), Is.False);
-            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, true), Is.EqualTo(!interrupted));
-            Assert.That(armed, Is.False);
-            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, true), Is.False);
+            var square = new[]
+            {
+                TrTransform.T(Vector3.zero), TrTransform.T(Vector3.right),
+                TrTransform.T(Vector3.right + Vector3.forward), TrTransform.T(Vector3.forward)
+            };
+            SplineCurve.Sample(square, m_Samples);
+            Quaternion first = SplineCurve.GetAutoOrientation(m_Samples, 0, closed: false);
+            Quaternion last = SplineCurve.GetAutoOrientation(m_Samples, m_Samples.Count - 1, closed: false);
+            Assert.That(Vector3.Dot(first * Vector3.forward, Vector3.right), Is.GreaterThan(0.99f));
+            Assert.That(Vector3.Dot(last * Vector3.forward, Vector3.left), Is.GreaterThan(0.99f));
+
+            SplineCurve.Sample(square, m_Samples, closed: true);
+            first = SplineCurve.GetAutoOrientation(m_Samples, 0, closed: true);
+            last = SplineCurve.GetAutoOrientation(m_Samples, m_Samples.Count - 1, closed: true);
+            Assert.That(Quaternion.Angle(first, last), Is.LessThan(0.01f));
         }
 
         [Test]
@@ -112,7 +117,8 @@ namespace TiltBrush
                     TrTransform.TR(new Vector3(0.2f, 0.8f, 2f), Quaternion.Euler(15, 32, 9)),
                     TrTransform.T(new Vector3(3f, 1f, 2f))
                 };
-                var deckDepths = new[] { 0f, 58f, 91f };
+                var deckDepths = new[] { 0f, 58.5f, 91f };
+                const float radiusInches = 72.5f;
                 if (!legacy)
                 {
                     for (int i = 0; i < knots.Length; i++)
@@ -131,11 +137,12 @@ namespace TiltBrush
                     m_BrushGuid = Guid.NewGuid(),
                     m_Color = Color.cyan,
                     m_BrushScale = 1,
-                    m_BrushSize = 0.15f,
+                    m_BrushSize = legacy ? 0.15f : radiusInches * TransitionBrush.UnitsPerInch,
                     m_SplineKnotCount = knots.Length,
                     m_SplineControlPoints = legacy ? null : knots,
-                    m_Flags = legacy ? SketchMemoryScript.StrokeFlags.None :
-                        SketchMemoryScript.StrokeFlags.TransitionVariableDeck,
+                    m_Flags = legacy ? SketchMemoryScript.StrokeFlags.None : TransitionBrush.FlagsWithSurfaceOptions(
+                        SketchMemoryScript.StrokeFlags.TransitionVariableDeck | SketchMemoryScript.StrokeFlags.SplineAutoOrient,
+                        new TransitionBrush.SurfaceOptions(TransitionBrush.CopingKind.Steel, tile: true, deck: false)),
                     m_ControlPoints = m_Samples.Select((point, i) => new PointerManager.ControlPoint
                     {
                         m_Pos = point.translation,
@@ -169,6 +176,12 @@ namespace TiltBrush
                 Assert.That(SplineCurve.IsEditable(loaded[1]), Is.False);
                 Assert.That(loaded[0].m_SplineControlPoints == null, Is.EqualTo(legacy));
                 Assert.That(loaded[0].m_BrushGuid, Is.EqualTo(stroke.m_BrushGuid));
+                Assert.That(loaded[0].m_Flags, Is.EqualTo(stroke.m_Flags));
+                Assert.That(SplineCurve.AutoOrients(loaded[0]), Is.EqualTo(!legacy));
+                Assert.That(loaded[0].m_BrushSize, Is.EqualTo(stroke.m_BrushSize));
+                if (!legacy)
+                    Assert.That(loaded[0].m_BrushSize / TransitionBrush.UnitsPerInch,
+                        Is.EqualTo(radiusInches).Within(1e-4f));
                 Assert.That(TransitionBrush.HasVariableDeck(loaded[0]), Is.EqualTo(!legacy));
                 int stride = SplineCurve.SamplesPerSegment;
                 for (int i = 0; i < knots.Length; i++)
@@ -178,6 +191,7 @@ namespace TiltBrush
                     Assert.That(loadedKnot.rotation, Is.EqualTo(knots[i].rotation));
                     if (!legacy)
                     {
+                        // Saved splines read deck depths back from the sampled stroke pressures.
                         Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[i * stride].m_Pressure),
                             Is.EqualTo(deckDepths[i]).Within(1e-4f));
                     }
@@ -185,7 +199,7 @@ namespace TiltBrush
                 if (!legacy)
                 {
                     Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[stride / 2].m_Pressure),
-                        Is.EqualTo(29f).Within(1e-4f));
+                        Is.EqualTo(29.25f).Within(1e-4f));
                     Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[^1].m_Pressure),
                         Is.EqualTo(closed ? deckDepths[0] : deckDepths[^1]).Within(1e-4f));
                 }

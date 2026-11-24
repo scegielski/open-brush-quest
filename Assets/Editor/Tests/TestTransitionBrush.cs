@@ -28,7 +28,7 @@ namespace TiltBrush
             var profile = new TransitionBrush.SurfaceProfile(height, radius);
             Vector2 deck = profile.Sample(0, out float deckDistance);
             Assert.That(deck.x, Is.LessThan(0f));
-            Assert.That(deck.y, Is.EqualTo(height));
+            Assert.That(deck.y, Is.LessThan(height));
             Assert.That(deckDistance, Is.LessThan(0f));
             Vector2 copingEdge = profile.Sample(1, out _);
             Assert.That(copingEdge.x - deck.x,
@@ -41,6 +41,8 @@ namespace TiltBrush
             Vector2 join = profile.Sample(TransitionBrush.WallStart, out float joinDistance);
             Assert.That(joinDistance, Is.Zero);
             Assert.That(join.y, Is.LessThan(lip.y));
+            if (height > radius)
+                Assert.That(lip.x - join.x, Is.EqualTo(1.5f * TransitionBrush.UnitsPerInch).Within(1e-5f));
             Vector2 floor = profile.Sample(TransitionBrush.ProfilePoints - 1, out _);
             Assert.That(floor.y, Is.Zero);
             Assert.That(floor.x, Is.EqualTo(run).Within(1e-5f));
@@ -53,12 +55,63 @@ namespace TiltBrush
         }
 
         [Test]
-        public void RadiusDisplaysWholeInchesAcrossFootBoundaries()
+        public void DimensionsDisplayHalfInchesAcrossFootBoundaries()
         {
             Assert.That(TransitionBrush.FormatFeetAndInches(71), Is.EqualTo("5 ft 11 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(71.5f), Is.EqualTo("5 ft 11.5 in"));
             Assert.That(TransitionBrush.FormatFeetAndInches(72), Is.EqualTo("6 ft 0 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(72.5f), Is.EqualTo("6 ft 0.5 in"));
             Assert.That(TransitionBrush.FormatFeetAndInches(73), Is.EqualTo("6 ft 1 in"));
-            Assert.That(TransitionBrush.FormatFeetAndInches(-14), Is.EqualTo("-1 ft 2 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(-14.5f), Is.EqualTo("-1 ft 2.5 in"));
+        }
+
+        [Test]
+        public void HalfInchSettingsRetainLegacyPreferences()
+        {
+            const string radius = "TransitionRadiusInches";
+            const string deck = "TransitionDeckDepthInches";
+            const string radiusHalf = "TransitionRadiusHalfInches";
+            const string deckHalf = "TransitionDeckDepthHalfInches";
+            string[] keys = { radius, deck, radiusHalf, deckHalf };
+            var previous = keys.Select(key => PlayerPrefs.HasKey(key) ? (int?)PlayerPrefs.GetInt(key) : null).ToArray();
+            try
+            {
+                PlayerPrefs.DeleteKey(radiusHalf);
+                PlayerPrefs.DeleteKey(deckHalf);
+                PlayerPrefs.DeleteKey(radius);
+                Assert.That(TransitionBrush.RadiusInches, Is.EqualTo(54f));
+                PlayerPrefs.SetInt(radius, 83);
+                PlayerPrefs.SetInt(deck, 27);
+                Assert.That(TransitionBrush.RadiusInches, Is.EqualTo(83f));
+                Assert.That(TransitionBrush.DeckDepthInches, Is.EqualTo(27f));
+                TransitionBrush.RadiusHalfInches++;
+                TransitionBrush.DeckDepthHalfInches--;
+                Assert.That(TransitionBrush.RadiusInches, Is.EqualTo(83.5f));
+                Assert.That(TransitionBrush.DeckDepthInches, Is.EqualTo(26.5f));
+            }
+            finally
+            {
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (previous[i] is int value)
+                        PlayerPrefs.SetInt(keys[i], value);
+                    else
+                        PlayerPrefs.DeleteKey(keys[i]);
+                }
+            }
+        }
+
+        [Test]
+        public void VerticalGridSnapUsesTheAdjustedFloor()
+        {
+            float spacing = TransitionBrush.UnitsPerInch;
+            float floor = spacing * 0.5f;
+            var position = new Vector3(1.2f * spacing, floor + 0.2f * spacing, -1.2f * spacing);
+            var snapped = FreePaintTool.RoundGridPosition(position, spacing, x: true, y: true, z: true,
+                floorHeight: floor);
+            Assert.That(snapped, Is.EqualTo(new Vector3(spacing, floor, -spacing)));
+            Assert.That(FreePaintTool.RoundGridPosition(position, spacing, x: true, y: false, z: true,
+                floorHeight: floor).y, Is.EqualTo(position.y));
         }
 
         [Test]
@@ -78,11 +131,9 @@ namespace TiltBrush
                 Is.LessThan(1e-5f));
         }
 
-        [TestCase(false, 0)]
-        [TestCase(false, 1)]
-        [TestCase(true, 2)]
-        [TestCase(true, 3)]
-        public void PreviewAndMeasurementsRenderOverOpaqueSketchGeometry(bool tipBehindViewer, int turns)
+        [TestCase(0)]
+        [TestCase(1)]
+        public void PreviewRendersOverOpaqueSketchGeometryAndRespondsToDimensions(int turns)
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
                 Assert.Ignore("Preview rendering requires a graphics device.");
@@ -121,13 +172,19 @@ namespace TiltBrush
                 occluderMaterial.SetColor("_BaseColor", Color.black);
                 occluder.GetComponent<MeshRenderer>().sharedMaterial = occluderMaterial;
 
-                var coping = new Vector3(0f, 30f * TransitionBrush.UnitsPerInch, tipBehindViewer ? -15f : 0f);
-                tool.DrawTransitionPreview(TrTransform.identity, coping,
-                    Vector3.forward, camera, 72, turns);
-                var label = tool.GetComponentInChildren<TMPro.TextMeshPro>();
-                Assert.That(label.text,
-                    Is.EqualTo($"Radius 6 ft 0 in\nHeight 2 ft 6 in\nOrientation {turns * 90}°\nDeck Depth 3 ft 0 in"));
-                label.ForceMeshUpdate();
+                var coping = new Vector3(0f, 30f * TransitionBrush.UnitsPerInch, 0f);
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 72, turns,
+                    viewer: camera.transform);
+                var preview = tool.transform.Find("Transition profile preview");
+                var height = preview.GetComponentInChildren<TMPro.TextMeshPro>();
+                Assert.That(height, Is.Not.Null);
+                Assert.That(height.text, Is.EqualTo("Height 2 ft 6 in"));
+                Assert.That(height.transform.position.y, Is.GreaterThan(coping.y));
+                var line = preview.GetComponent<LineRenderer>();
+                Assert.That(line.widthMultiplier, Is.EqualTo(0.055f));
+                Assert.That(line.textureMode, Is.EqualTo(LineTextureMode.Tile));
+                Assert.That(line.sharedMaterial.shader.name, Is.EqualTo("Custom/TransitionPreviewLine"));
+                Assert.That(ShaderUtil.ShaderHasError(line.sharedMaterial.shader), Is.False);
                 RenderPipeline.SubmitRenderRequest(camera,
                     new UniversalRenderPipeline.SingleCameraRequest { destination = target });
                 RenderTexture.active = target;
@@ -137,21 +194,52 @@ namespace TiltBrush
                     Is.GreaterThan(512 * 450), "An opaque surface must cover the preview in depth.");
                 Assert.That(pixels.Count(p => p.a > 128 && p.b > 140 && p.g > 140 && p.r < 150), Is.GreaterThan(30),
                     "The arc must write visible cyan pixels with alpha.");
-                Assert.That(pixels.Count(p => p.a > 128 && p.r > 200 && p.g > 200 && p.b > 200), Is.GreaterThan(30),
-                    "The measurement readout must write visible white pixels with alpha.");
+                float Run() => Vector3.ProjectOnPlane(line.GetPosition(line.positionCount - 1) -
+                    line.GetPosition(TransitionBrush.TopOfCoping), Vector3.up).magnitude;
+                float initialRun = Run();
+                float initialDeck = Vector3.Distance(line.GetPosition(0), line.GetPosition(1));
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 71.5f, turns,
+                    viewer: camera.transform);
+                Assert.That(Run(), Is.LessThan(initialRun));
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 71.5f, turns,
+                    deckDepthInches: 12.5f, viewer: camera.transform);
+                Assert.That(Vector3.Distance(line.GetPosition(0), line.GetPosition(1)), Is.GreaterThan(initialDeck));
+
+                // A profile behind the viewer still has its exact dimensions in the sketch.
+                coping.y = 36f * TransitionBrush.UnitsPerInch;
+                coping.z = -15f;
+                Assert.That(camera.WorldToViewportPoint(coping).z, Is.LessThan(0f));
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 54, turns,
+                    viewer: camera.transform);
+                Assert.That(height.text, Is.EqualTo("Height 3 ft 0 in"));
+                Assert.That(line.GetPosition(TransitionBrush.TopOfCoping), Is.EqualTo(coping));
+                Assert.That(line.GetPosition(line.positionCount - 1).y, Is.Zero);
+                Assert.That(Run() / TransitionBrush.UnitsPerInch, Is.EqualTo(50.91169f).Within(1e-4f));
+
+                float raisedFloor = 6.5f * TransitionBrush.UnitsPerInch;
+                coping.y = 54f * TransitionBrush.UnitsPerInch;
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 54, turns,
+                    viewer: camera.transform, floorHeight: raisedFloor);
+                Assert.That(height.text, Is.EqualTo("Height 3 ft 11.5 in"));
+                Assert.That(line.GetPosition(TransitionBrush.TopOfCoping), Is.EqualTo(coping));
+                Assert.That(line.GetPosition(line.positionCount - 1).y, Is.EqualTo(raisedFloor));
 
                 coping.y = -2f * TransitionBrush.UnitsPerInch;
-                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, camera, 72, turns,
-                    deckDepthInches: 42);
-                Assert.That(label.text,
-                    Is.EqualTo($"Radius 6 ft 0 in\nHeight -0 ft 2 in\nOrientation {turns * 90}°\nDeck Depth 3 ft 6 in"));
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 72, turns,
+                    viewer: camera.transform);
+                Assert.That(line.enabled, Is.False);
+                Assert.That(height.renderer.enabled, Is.False);
 
-                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, camera, 72, turns,
-                    style: TransitionBrush.SweepStyle.SteelTransition);
-                Assert.That(label.text, Is.EqualTo($"Radius 6 ft 0 in\nHeight -0 ft 2 in\nOrientation {turns * 90}°"));
-                var line = tool.GetComponentInChildren<LineRenderer>();
-                Assert.That(line.positionCount, Is.EqualTo(TransitionBrush.WallPoints + TransitionBrush.TubePoints));
-                Assert.That(line.GetPosition(0), Is.EqualTo(line.GetPosition(TransitionBrush.TubePoints - 1)));
+                coping.y = 30f * TransitionBrush.UnitsPerInch;
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, 72, turns,
+                    style: TransitionBrush.SweepStyle.SteelTransition, viewer: camera.transform);
+                Assert.That(line.enabled, Is.True);
+                Assert.That(height.renderer.enabled, Is.True);
+                int tubeStart = TransitionBrush.DeckPoints;
+                Assert.That(line.positionCount, Is.EqualTo(
+                    TransitionBrush.DeckPoints + TransitionBrush.WallPoints + TransitionBrush.TubePoints));
+                Assert.That(line.GetPosition(tubeStart),
+                    Is.EqualTo(line.GetPosition(tubeStart + TransitionBrush.TubePoints - 1)));
             }
             finally
             {
@@ -164,8 +252,10 @@ namespace TiltBrush
                 var preview = tool.transform.Find("Transition profile preview");
                 if (preview != null)
                 {
+                    var height = preview.GetComponentInChildren<TMPro.TextMeshPro>(true);
+                    if (height != null)
+                        Object.DestroyImmediate(height.fontSharedMaterial);
                     Object.DestroyImmediate(preview.GetComponent<LineRenderer>().sharedMaterial);
-                    Object.DestroyImmediate(preview.GetComponentInChildren<TMPro.TextMeshPro>().fontSharedMaterial);
                     Object.DestroyImmediate(preview.gameObject);
                 }
                 tool.gameObject.layer = layer;
@@ -200,6 +290,7 @@ namespace TiltBrush
                 filter.sharedMesh = mesh;
                 tile.GetComponent<MeshRenderer>().sharedMaterial = descriptor.Material;
                 mesh.SetUVs(1, Enumerable.Repeat(Vector3.forward, mesh.vertexCount).ToList());
+                mesh.colors32 = Enumerable.Repeat(new Color32(128, 128, 128, 255), mesh.vertexCount).ToArray();
                 for (int face = 0; face < 6; face++)
                     cube.SetPixels(Enumerable.Repeat(new Color(0.10f, 0.26f, 0.8f), 256).ToArray(), (CubemapFace)face);
                 cube.Apply();
@@ -222,6 +313,12 @@ namespace TiltBrush
                 var reflected = image.GetPixel(32, 32);
                 Assert.That(reflected.a, Is.GreaterThan(0.99f));
                 Assert.That(reflected.b - reflected.r, Is.GreaterThan(0.30f));
+
+                mesh.colors32 = Enumerable.Repeat(new Color32(220, 90, 40, 255), mesh.vertexCount).ToArray();
+                RenderPipeline.SubmitRenderRequest(camera,
+                    new UniversalRenderPipeline.SingleCameraRequest { destination = target });
+                image.ReadPixels(new Rect(0f, 0f, 64f, 64f), 0, 0);
+                Assert.That(image.GetPixel(32, 32).b, Is.LessThan(reflected.b - 0.12f));
             }
             finally
             {
@@ -298,15 +395,25 @@ namespace TiltBrush
 
                 // Fit the coping, tile band, and adjacent wall into one view of the brush material.
                 mesh.uv = mesh.uv.Select(uv => new Vector2((uv.x - 1f) * 0.10f, uv.y * 0.20f - 0.075f)).ToArray();
+                mesh.colors32 = Enumerable.Repeat(new Color32(128, 128, 128, 255), mesh.vertexCount).ToArray();
                 RenderPipeline.SubmitRenderRequest(camera,
                     new UniversalRenderPipeline.SingleCameraRequest { destination = target });
                 RenderTexture.active = target;
                 image.ReadPixels(new Rect(0, 0, 128, 128), 0, 0);
                 Color tileColor = image.GetPixel(23, 63);
                 Color groutColor = image.GetPixel(25, 63);
+                Color copingColor = image.GetPixel(23, 32);
                 Assert.That(tileColor.b, Is.GreaterThan(tileColor.r + 0.06f));
                 Assert.That(tileColor.b, Is.GreaterThan(groutColor.b + 0.03f));
-                Assert.That(image.GetPixel(23, 32).b, Is.LessThan(tileColor.b));
+                Assert.That(copingColor.b, Is.LessThan(tileColor.b));
+
+                mesh.colors32 = Enumerable.Repeat(new Color32(156, 114, 76, 255), mesh.vertexCount).ToArray();
+                RenderPipeline.SubmitRenderRequest(camera,
+                    new UniversalRenderPipeline.SingleCameraRequest { destination = target });
+                RenderTexture.active = target;
+                image.ReadPixels(new Rect(0, 0, 128, 128), 0, 0);
+                Assert.That(image.GetPixel(23, 63).b, Is.LessThan(tileColor.b - 0.025f));
+                Assert.That(image.GetPixel(23, 32).b, Is.LessThan(copingColor.b - 0.025f));
                 Assert.That(image.GetPixel(23, 105).r, Is.GreaterThan(image.GetPixel(23, 105).b));
 
                 // The same negative UVs on the deck should display concrete in place of coping.
@@ -319,6 +426,7 @@ namespace TiltBrush
                 Assert.That(deckColor.r, Is.GreaterThan(deckColor.b));
 
                 // Magnify the surface so pixels sample the glaze, bevel, and full mortar separately.
+                mesh.colors32 = Enumerable.Repeat(new Color32(128, 128, 128, 255), mesh.vertexCount).ToArray();
                 mesh.SetUVs(1, Enumerable.Repeat(Vector3.zero, mesh.vertexCount).ToList());
                 mesh.uv = quadUvs.Select(uv => new Vector2((uv.x - 0.5f) / 60f, (1.25f + uv.y * 0.5f) / 60f))
                     .ToArray();
@@ -458,12 +566,22 @@ namespace TiltBrush
         [TestCase(0, 0, -1, 0, 6, 0, 10, SketchMemoryScript.StrokeFlags.TransitionControllerHeading)]
         [TestCase(0, 1, 0, 0, 6, 0, 10, SketchMemoryScript.StrokeFlags.TransitionVariableDeck)]
         [TestCase(0, 0, -1, 0, 6, 0, 10, SketchMemoryScript.StrokeFlags.TransitionHeadingOffsets)]
+        [TestCase(0, 1, 0, 0, 6, 0, 10, SketchMemoryScript.StrokeFlags.TransitionVariableDeck, true)]
+        [TestCase(1, 1, 0, 0, 6, 0, 10, SketchMemoryScript.StrokeFlags.TransitionControllerHeading |
+            SketchMemoryScript.StrokeFlags.SplineAutoOrient)]
         public void BrushPrefabProducesATexturedSurfaceAtItsSavedAngle(
             int turns, int acrossX, int acrossZ, int minX, int maxX, int minZ, int maxZ,
-            SketchMemoryScript.StrokeFlags headingMode)
+            SketchMemoryScript.StrokeFlags headingMode, bool untiled = false)
         {
-            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(kBrush);
-            Assert.That(descriptor.Description, Is.EqualTo(TransitionBrush.BrushName));
+            string brushPath = untiled ? kBrush.Replace("/Transition.asset", "/PoolCopingTransition.asset") : kBrush;
+            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(brushPath);
+            var manifest = AssetDatabase.LoadAssetAtPath<TiltBrushManifest>("Assets/Manifest.asset");
+            Assert.That(manifest.Brushes, Does.Contain(descriptor));
+            Assert.That(descriptor.DurableName, Is.EqualTo(untiled ? "Transition with Pool Coping" : "Transition"));
+            Assert.That(descriptor.Description, Is.EqualTo(
+                untiled ? "Transition with Pool Coping" : "Transition with Tile and Pool Coping"));
+            Assert.That(TransitionBrush.HasDeck(descriptor), Is.True);
+            Assert.That(TransitionBrush.IsTransition(descriptor), Is.True);
             Assert.That(descriptor.m_AllowExport, Is.True);
             Assert.That(descriptor.Material, Is.Not.Null);
             Assert.That(descriptor.HasExportTexture(), Is.True);
@@ -493,7 +611,7 @@ namespace TiltBrush
                 const float firstDepth = 18f * TransitionBrush.UnitsPerInch;
                 const float lastDepth = 64f * TransitionBrush.UnitsPerInch;
                 var profile = new TransitionBrush.SurfaceProfile(end.translation.y, 6f,
-                    variableDeck ? lastDepth : TransitionBrush.DefaultDeckDepthInches * TransitionBrush.UnitsPerInch);
+                    variableDeck ? lastDepth : TransitionBrush.LegacyPoolDeckDepthInches * TransitionBrush.UnitsPerInch);
                 var flags = TransitionBrush.FlagsForQuarterTurns(turns) | headingMode;
                 var points = new[]
                 {
@@ -508,6 +626,11 @@ namespace TiltBrush
                 Vector3 across = new Vector3(acrossX, 0, acrossZ);
                 if (headingMode == SketchMemoryScript.StrokeFlags.TransitionFixedHeading)
                     points[0].m_Orient = Quaternion.LookRotation(Vector3.right);
+                if ((headingMode & SketchMemoryScript.StrokeFlags.SplineAutoOrient) != 0)
+                {
+                    end.rotation = Quaternion.LookRotation(Vector3.right);
+                    points[1].m_Orient = end.rotation;
+                }
                 if (headingMode == SketchMemoryScript.StrokeFlags.TransitionHeadingOffsets)
                 {
                     end.rotation = Quaternion.Euler(0f, 90f, 0f);
@@ -544,9 +667,10 @@ namespace TiltBrush
                 Vector3 firstAcross = headingMode == SketchMemoryScript.StrokeFlags.TransitionControllerHeading ||
                     headingMode == SketchMemoryScript.StrokeFlags.TransitionHeadingOffsets ? Vector3.right : across;
                 float deckWidth = 10f * TransitionBrush.UnitsPerInch;
-                float defaultDepth = TransitionBrush.DefaultDeckDepthInches * TransitionBrush.UnitsPerInch;
-                Vector3 firstDeck = start.translation - firstAcross * (deckWidth + (variableDeck ? firstDepth : defaultDepth));
-                Vector3 lastDeck = end.translation - across * (deckWidth + (variableDeck ? lastDepth : defaultDepth));
+                float defaultDepth = TransitionBrush.LegacyPoolDeckDepthInches * TransitionBrush.UnitsPerInch;
+                Vector3 deckDrop = Vector3.up * (0.6f * TransitionBrush.UnitsPerInch);
+                Vector3 firstDeck = start.translation - deckDrop - firstAcross * (deckWidth + (variableDeck ? firstDepth : defaultDepth));
+                Vector3 lastDeck = end.translation - deckDrop - across * (deckWidth + (variableDeck ? lastDepth : defaultDepth));
                 Assert.That(mesh.bounds.min.x, Is.EqualTo(Mathf.Min(minX, firstDeck.x, lastDeck.x)).Within(1e-5f));
                 Assert.That(mesh.bounds.max.x, Is.EqualTo(Mathf.Max(maxX, firstDeck.x, lastDeck.x)).Within(1e-5f));
                 Assert.That(mesh.bounds.min.z, Is.EqualTo(Mathf.Min(minZ, firstDeck.z, lastDeck.z)).Within(1e-5f));
@@ -565,7 +689,12 @@ namespace TiltBrush
                 Assert.That(uv[TransitionBrush.TopOfCoping].y, Is.LessThan(0f));
                 Assert.That(uv[TransitionBrush.WallStart].y, Is.Zero);
                 Assert.That(uv[TransitionBrush.ProfilePoints - 1].y,
-                    Is.EqualTo((2f - 1.5f * TransitionBrush.UnitsPerInch + 3f * Mathf.PI) / tileSize).Within(1e-5f));
+                    Is.EqualTo((2f - 2.25f * TransitionBrush.UnitsPerInch + 3f * Mathf.PI) / tileSize).Within(1e-5f));
+                var region = new List<Vector3>();
+                mesh.GetUVs(1, region);
+                Assert.That(region[0], Is.EqualTo(Vector3.right));
+                Assert.That(region[TransitionBrush.WallStart], Is.EqualTo(untiled ? Vector3.up : Vector3.zero));
+                Assert.That(region[TransitionBrush.WallStart + 1], Is.EqualTo(untiled ? Vector3.up : Vector3.zero));
                 int rim = TransitionBrush.TopOfCoping;
                 Vector4 tangent = mesh.tangents[rim];
                 var tangentDirection = new Vector3(tangent.x, tangent.y, tangent.z);
@@ -600,13 +729,23 @@ namespace TiltBrush
         }
 
         [TestCase("ConcreteTransition", "Concrete Transition", 26, 0f, 0f, 8f, false)]
+        [TestCase("ConcreteTransition", "Concrete Transition", 26, 0f, 6.5f * TransitionBrush.UnitsPerInch, 8f,
+            false, -1f, false, -1, false, 13)]
+        [TestCase("ConcreteTransition", "Concrete Transition", 26, 0f, -6.5f * TransitionBrush.UnitsPerInch, 8f,
+            false, -1f, false, -1, false, -13)]
         [TestCase("SteelTransition", "Steel Transition", 43, -1f, 0f, 8f, true)]
-        [TestCase("PoolCoping", "Pool Coping", 12, -10f, 8f - 1.5f * TransitionBrush.UnitsPerInch, 8f, false)]
+        [TestCase("SteelTransition", "Steel Transition", 45, -13.5f, 0f, 8f, true, 12.5f)]
+        [TestCase("SteelTransition", "Steel Transition", 45, -19.5f, 0f, 8f, true, 18.5f, true)]
+        [TestCase("PoolCoping", "Pool Coping", 15, -10f, 8f - 2.25f * TransitionBrush.UnitsPerInch, 8f, false)]
         [TestCase("PoolTile", "Pool Tile", 2, 0f, 8f - TransitionBrush.TileBandWidth, 8f, false)]
         [TestCase("SteelCoping", "Steel Coping", 17, -1f, 8f - TransitionBrush.SteelRadius,
             8f + TransitionBrush.SteelRadius, true)]
+        [TestCase("ConcreteTransition", "Concrete Transition", 28, -12.5f, 0f, 8f, false, 12.5f, true, 0, true)]
+        [TestCase("ConcreteTransition", "Concrete Transition", 38, -10f, 0f, 8f, false, 0f, true, 1, false)]
+        [TestCase("ConcreteTransition", "Concrete Transition", 45, -13.5f, 0f, 8f, true, 12.5f, true, 2, true)]
         public void ConstructionBrushAppearsInTheManifestAndDrawsOnlyItsOwnSurfaces(string asset, string name,
-            int rows, float leftInches, float minHeight, float maxHeight, bool steel)
+            int rows, float leftInches, float minHeight, float maxHeight, bool steel, float deckInches = -1f,
+            bool savedDeck = false, int copingOption = -1, bool tileOption = false, int floorHeightHalfInches = 0)
         {
             var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(
                 $"Assets/Resources/Brushes/Basic/Transition/{asset}.asset");
@@ -614,7 +753,7 @@ namespace TiltBrush
             Assert.That(manifest.Brushes, Does.Contain(descriptor));
             Assert.That(descriptor.Description, Is.EqualTo(name));
             Assert.That(descriptor.m_ButtonTexture, Is.Not.Null);
-            Assert.That(TransitionBrush.HasDeck(descriptor), Is.False);
+            Assert.That(TransitionBrush.HasDeck(descriptor), Is.EqualTo(asset == "SteelTransition"));
 
             var scene = SceneManager.GetSceneByPath("Assets/Scenes/Main.unity");
             bool opened = !scene.isLoaded;
@@ -624,15 +763,50 @@ namespace TiltBrush
             var previousConfig = Config.m_SingletonState;
             var parent = new GameObject("Construction brush test canvas");
             Mesh mesh = null;
+            SceneScript sketchScene = null;
+            int previousFloorHeight = 0;
             try
             {
                 App.Instance = scene.GetRootGameObjects().Select(g => g.GetComponent<App>()).First(a => a != null);
                 Config.m_SingletonState = parent.AddComponent<Config>();
+                sketchScene = App.Scene;
+                previousFloorHeight = sketchScene.FloorHeightHalfInches;
+                sketchScene.RestoreFloorHeight(floorHeightHalfInches);
                 var start = TrTransform.T(Vector3.up * 8f);
                 LogAssert.Expect(LogType.Error,
                     "Instantiating mesh due to calling MeshFilter.mesh during edit mode. This will leak meshes. Please use MeshFilter.sharedMesh instead.");
                 var brush = BaseBrushScript.Create(parent.transform, start, descriptor, Color.gray, 6f);
-                brush.UpdatePosition_LS(TrTransform.T(new Vector3(0f, 8f, 10f)), 1f);
+                var end = TrTransform.T(new Vector3(0f, 8f, 10f));
+                float pressure = 1f;
+                if (savedDeck)
+                {
+                    pressure = TransitionBrush.EncodeDeckDepth(deckInches);
+                    var flags = SketchMemoryScript.StrokeFlags.TransitionVariableDeck;
+                    if (copingOption >= 0)
+                    {
+                        var options = new TransitionBrush.SurfaceOptions((TransitionBrush.CopingKind)copingOption,
+                            tileOption, deckInches > 0f);
+                        flags = TransitionBrush.FlagsWithSurfaceOptions(flags, options);
+                        var loaded = TransitionBrush.OptionsFor(descriptor, new StrokeData { m_Flags = flags });
+                        Assert.That(loaded.Coping, Is.EqualTo(options.Coping));
+                        Assert.That(loaded.Tile, Is.EqualTo(options.Tile));
+                        Assert.That(loaded.Deck, Is.EqualTo(options.Deck));
+                    }
+                    brush.SetStrokeData(new StrokeData
+                    {
+                        m_Flags = flags,
+                        m_ControlPoints = new[]
+                        {
+                            new PointerManager.ControlPoint { m_Pos = start.translation, m_Orient = start.rotation, m_Pressure = pressure },
+                            new PointerManager.ControlPoint { m_Pos = end.translation, m_Orient = end.rotation, m_Pressure = pressure }
+                        }
+                    });
+                }
+                else if (deckInches >= 0)
+                {
+                    ((TransitionBrush)brush).NewStrokeDeckDepthInches = deckInches;
+                }
+                brush.UpdatePosition_LS(end, pressure);
                 brush.ApplyChangesToVisuals();
                 mesh = brush.GetComponent<MeshFilter>().sharedMesh;
                 Assert.That(mesh.vertexCount, Is.EqualTo(2 * rows));
@@ -643,8 +817,9 @@ namespace TiltBrush
                 var region = new List<Vector3>();
                 mesh.GetUVs(1, region);
                 Assert.That(region.Any(uv => uv.z > 0.5f), Is.EqualTo(steel));
-                Assert.That(region.All(uv => uv.x == 0f), Is.True);
-                Assert.That(region.Any(uv => uv.y > 0.5f), Is.EqualTo(TransitionBrush.IsTransition(descriptor)));
+                Assert.That(region.Count(uv => uv.x > 0.5f), Is.EqualTo(deckInches > 0 ? 4 : 0));
+                Assert.That(region.Any(uv => uv.y > 0.5f),
+                    Is.EqualTo(TransitionBrush.IsTransition(descriptor) && !tileOption));
                 if (steel)
                 {
                     int firstTubeVertex = rows - TransitionBrush.TubePoints;
@@ -662,6 +837,8 @@ namespace TiltBrush
             }
             finally
             {
+                if (sketchScene != null)
+                    sketchScene.RestoreFloorHeight(previousFloorHeight);
                 Object.DestroyImmediate(parent);
                 if (mesh != null)
                     Object.DestroyImmediate(mesh);

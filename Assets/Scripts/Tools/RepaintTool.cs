@@ -185,7 +185,6 @@ namespace TiltBrush
             var pm = PointerManager.m_Instance;
             var didRepaint = SketchMemoryScript.m_Instance.MemorizeStrokeRepaint(
                 rGameObject, pm.RecolorOn, pm.RebrushOn, pm.ResizeOn, pm.JitterOn);
-            PlayModifyStrokeSound();
             if (didRepaint) { PlayModifyStrokeSound(); }
             return didRepaint;
         }

@@ -77,6 +77,9 @@ Shader "Custom/Grid3D"
             float _PreviewMode;
             float3 _BoundsMin;
             float3 _BoundsMax;
+            // XY centers the visible patch, Z is its canvas-space half-width, W is the axis mask.
+            float4 _FloorGrid;
+            float _FloorHeight;
 
             struct appdata {
                 uint id : SV_VERTEXID;
@@ -182,6 +185,18 @@ Shader "Custom/Grid3D"
                 UNITY_TRANSFER_INSTANCE_ID(v, o);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 
+                if (_FloorGrid.w > 0.5)
+                {
+                    float x = v.id == 1 || v.id == 3 || v.id == 5 ? 1.0 : -1.0;
+                    float z = v.id == 2 || v.id == 3 || v.id == 4 ? 1.0 : -1.0;
+                    float2 floorOffset = float2(x, z) * _FloorGrid.z;
+                    float2 floorPosition = _FloorGrid.xy + floorOffset;
+                    float4 vertexPos = mul(_CanvasToWorldMatrix, float4(floorPosition.x, _FloorHeight, floorPosition.y, 1));
+                    o.vertex = mul(UNITY_MATRIX_VP, vertexPos);
+                    o.pos = float4(floorOffset, 0, 0);
+                    return o;
+                }
+
                 if (_PreviewMode > 0.5)
                 {
                     float3 vertexPos = calcBoxVertex(v.id);
@@ -228,7 +243,7 @@ Shader "Custom/Grid3D"
 
                 float3 quantizedPointer_CS = float3(
                     round(_Pointer_CS.x / _GridInterval) * _GridInterval,
-                    round(_Pointer_CS.y / _GridInterval) * _GridInterval,
+                    round((_Pointer_CS.y - _FloorHeight) / _GridInterval) * _GridInterval + _FloorHeight,
                     round(_Pointer_CS.z / _GridInterval) * _GridInterval
                 );
 
@@ -267,9 +282,39 @@ Shader "Custom/Grid3D"
 
             fixed4 _Color;
 
+            float2 floorStripeIntegral(float2 position, float stripeWidth)
+            {
+                position += stripeWidth * 0.5;
+                return floor(position) * stripeWidth + min(frac(position), stripeWidth);
+            }
+
+            float floorGridCoverage(float2 floorOffset)
+            {
+                // Move the visible patch freely but keep the stripe centers on the canvas-origin lattice.
+                float2 cell = floorOffset / _GridInterval + frac(_FloorGrid.xy / _GridInterval);
+                float2 footprint = max(fwidth(cell), 0.0001);
+                float2 nearest = frac(cell + 0.5) - 0.5;
+                float stripeWidth = _LineWidth / _GridInterval;
+                float2 start = floorStripeIntegral(nearest - footprint * 0.5, stripeWidth);
+                float2 finish = floorStripeIntegral(nearest + footprint * 0.5, stripeWidth);
+                float2 coverage = saturate((finish - start) / footprint);
+                coverage *= 1.0 - smoothstep(0.33, 0.85, footprint);
+                coverage.x *= _FloorGrid.w == 2 ? 0.0 : 1.0;
+                coverage.y *= _FloorGrid.w == 1 ? 0.0 : 1.0;
+                // One contribution per pixel also avoids bright additive intersections.
+                return (coverage.x + coverage.y - coverage.x * coverage.y) *
+                    (1.0 - smoothstep(0.62, 1.0, length(floorOffset) / _FloorGrid.z));
+            }
+
             fixed4 frag (v2f i) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
+                if (_FloorGrid.w > 0.5)
+                {
+                    float coverage = floorGridCoverage(i.pos.xy);
+                    clip(coverage - 0.001);
+                    return _Color * coverage;
+                }
                 return saturate(i.pos.rrrr) * _Color;
             }
             ENDHLSL

@@ -226,7 +226,7 @@ namespace TiltBrush
 
         private bool m_PointersRenderingRequested;
         private bool m_PointersRenderingActive;
-        private FreePaintTool m_TransitionPreviewTool;
+        private FreePaintTool m_FreePaintTool;
         private bool m_PointersHideOnControllerLoss;
 
         private float m_FreePaintPointerAngle;
@@ -303,7 +303,7 @@ namespace TiltBrush
         public float positionJitter { get; set; }
 
         [NonSerialized] public bool RecolorOn = true;
-        [NonSerialized] public bool RebrushOn = false;
+        [NonSerialized] public bool RebrushOn = true;
         [NonSerialized] public bool ResizeOn = false;
         [NonSerialized] public bool JitterOn = false;
 
@@ -686,6 +686,8 @@ namespace TiltBrush
 
         protected void OnDestroy()
         {
+            Destroy(m_CalibrationOrigin);
+            Destroy(m_CalibrationOriginMaterial);
             App.Scene.MainCanvas.PoseChanged -= OnPoseChanged;
         }
 
@@ -916,27 +918,28 @@ namespace TiltBrush
 
         private void LateUpdate()
         {
-            if (m_TransitionPreviewTool == null && SketchSurfacePanel.m_Instance != null &&
+            UpdateGridCalibrationOrigin();
+            if (m_FreePaintTool == null && SketchSurfacePanel.m_Instance != null &&
                 App.Instance != null && App.Instance.IsInStateThatAllowsPainting())
-                m_TransitionPreviewTool = SketchSurfacePanel.m_Instance
+                m_FreePaintTool = SketchSurfacePanel.m_Instance
                     .GetToolOfType(BaseTool.ToolType.FreePaintTool) as FreePaintTool;
 
-            if (m_TransitionPreviewTool != null)
-                m_TransitionPreviewTool.UpdateTransitionPreview(MainPointer, transform);
+            if (m_FreePaintTool != null)
+                m_FreePaintTool.UpdateTransitionPreview(MainPointer, transform);
         }
 
         internal string DescribeTransitionPreview()
         {
-            return m_TransitionPreviewTool != null ? m_TransitionPreviewTool.DescribeTransitionPreview() :
+            return m_FreePaintTool != null ? m_FreePaintTool.DescribeTransitionPreview() :
                 "Drawing controller preview has not initialized";
         }
 
         internal Quaternion GetTransitionStrokeOrientation(PointerScript pointer, CanvasScript canvas,
             Quaternion fallback, bool starting)
         {
-            if (pointer == MainPointer && m_TransitionPreviewTool != null)
-                return starting ? m_TransitionPreviewTool.CaptureTransitionOrientation(canvas, fallback) :
-                    m_TransitionPreviewTool.SampleTransitionOrientation(canvas, fallback);
+            if (pointer == MainPointer && m_FreePaintTool != null)
+                return starting ? m_FreePaintTool.CaptureTransitionOrientation(canvas, fallback) :
+                    m_FreePaintTool.SampleTransitionOrientation(canvas, fallback);
             return TransitionBrush.HorizontalOrientation(fallback);
         }
 
@@ -1009,9 +1012,9 @@ namespace TiltBrush
             }
         }
 
-        internal void SetTransitionRadius(int inches)
+        internal void SetTransitionRadiusHalfInches(int halfInches)
         {
-            TransitionBrush.RadiusInches = inches;
+            TransitionBrush.RadiusHalfInches = halfInches;
             for (int i = 0; i < m_NumActivePointers; i++)
             {
                 var pointer = m_Pointers[i].m_Script;
@@ -1039,6 +1042,9 @@ namespace TiltBrush
 
         public void SetBrushForAllPointers(BrushDescriptor desc)
         {
+            if (m_FreePaintTool != null && desc != null && MainPointer.CurrentBrush != desc)
+                m_FreePaintTool.FinishSplineForBrushChange();
+
             for (int i = 0; i < m_NumActivePointers; ++i)
             {
                 m_Pointers[i].m_Script.SetBrush(desc);

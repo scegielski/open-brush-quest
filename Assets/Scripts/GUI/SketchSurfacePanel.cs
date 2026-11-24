@@ -217,7 +217,7 @@ namespace TiltBrush
 
         public void EnableSpecificTool(BaseTool.ToolType rType)
         {
-            if (ActiveTool.m_Type == rType)
+            if (ActiveTool.m_Type == rType || !IsToolAvailable(rType))
             {
                 return;
             }
@@ -235,6 +235,13 @@ namespace TiltBrush
                     return;
                 }
             }
+        }
+
+        internal static bool IsToolAvailable(BaseTool.ToolType tool)
+        {
+            var controls = SketchControlsScript.m_Instance;
+            return controls == null || !controls.IsWorldCalibrationLocked ||
+                !controls.IsViewOnlyNavigationTool(tool);
         }
 
         public void DisableSpecificTool(BaseTool.ToolType rType)

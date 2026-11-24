@@ -60,6 +60,19 @@ namespace TiltBrush
                 (byte)UnityEngine.Random.Range(0, 255));
         }
 
+        [TestCase(-3)]
+        [TestCase(0)]
+        [TestCase(7)]
+        public void SketchFloorHeightRoundTripsInHalfInches(int height)
+        {
+            string json = Serialize(new SketchMetadata { FloorHeightHalfInches = height });
+
+            Assert.That(Deserialize<SketchMetadata>(json).FloorHeightHalfInches, Is.EqualTo(height));
+            if (height == 0)
+                Assert.That(json, Does.Not.Contain(nameof(SketchMetadata.FloorHeightHalfInches)));
+            Assert.That(Deserialize<SketchMetadata>("{}").FloorHeightHalfInches, Is.Zero);
+        }
+
         [Test]
         public void TestReadTrTransform()
         {

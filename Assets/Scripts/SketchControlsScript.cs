@@ -32,6 +32,7 @@ namespace TiltBrush
         // TODO L10n
         public const string kRemoveHeadsetFyi = "Remove headset to view.";
         private const float kPointableReticleSurfaceOffset = 0.12f;
+        private const string kCalibrationPreference = "GridCalibration";
 
         private string m_OpenBrushGalleryUrl => $"{VrAssetService.m_Instance.IcosaHomePage}/openbrush";
         private string m_BlocksGalleryUrl => $"{VrAssetService.m_Instance.IcosaHomePage}/blocks";
@@ -507,6 +508,10 @@ namespace TiltBrush
         private bool m_AllowWorldTransformLastFrame = false;
         private bool m_WorldBeingGrabbed;
         private TrTransform m_xfDropCamReset_RS;
+        private bool m_QuestCalibrationEnabled;
+        private TrTransform m_GridCalibrationPose = TrTransform.identity;
+        private int m_LastCalibrationGripFrame = -1;
+        private bool m_CalibrationWandOnRight;
 
         struct GpuIntersectionResult
         {
@@ -768,6 +773,60 @@ namespace TiltBrush
         public bool IsUserGrabbingWorld() { return m_GrabWand.grabbingWorld || m_GrabBrush.grabbingWorld; }
         public bool IsUserGrabbingWorldWithBrushHand() { return m_GrabBrush.grabbingWorld; }
         public bool IsUserTransformingWorld() { return m_GrabWand.grabbingWorld && m_GrabBrush.grabbingWorld; }
+
+        public bool GridCalibrationActive { get; private set; }
+        public bool CanCalibrateGrid => IsWorldCalibrationLocked && InputManager.m_Instance.AllowVrControllers &&
+            App.Instance.IsInStateThatAllowsPainting();
+        internal bool IsWorldCalibrationLocked => m_QuestCalibrationEnabled && !m_ViewOnly &&
+            MultiplayerManager.m_Instance?.State != ConnectionState.IN_ROOM;
+
+        internal TrTransform GetRoomResetPose(TrTransform fallback) =>
+            IsWorldCalibrationLocked ? m_GridCalibrationPose : fallback;
+
+        public void SetGridCalibration(bool active)
+        {
+            if (active == GridCalibrationActive || (active && !CanCalibrateGrid))
+                return;
+
+            GridCalibrationActive = active;
+            m_LastCalibrationGripFrame = -1;
+            if (active)
+            {
+                App.Scene.disableTiltProtection = false;
+                App.Scene.Pose = CalibratedPose(App.Scene.Pose);
+            }
+            else
+            {
+                m_GridCalibrationPose = CalibratedPose(App.Scene.Pose);
+                App.Scene.Pose = m_GridCalibrationPose;
+                var position = m_GridCalibrationPose.translation;
+                PlayerPrefs.SetFloat(kCalibrationPreference + "X", position.x);
+                PlayerPrefs.SetFloat(kCalibrationPreference + "Y", position.y);
+                PlayerPrefs.SetFloat(kCalibrationPreference + "Z", position.z);
+                PlayerPrefs.SetFloat(kCalibrationPreference + "Yaw", m_GridCalibrationPose.rotation.eulerAngles.y);
+                PlayerPrefs.Save();
+            }
+            EatGrabInput();
+            EatGazeObjectInput();
+        }
+
+        private static TrTransform CalibratedPose(TrTransform pose) =>
+            TrTransform.TR(pose.translation, Quaternion.Euler(0f, pose.rotation.eulerAngles.y, 0f));
+
+        private void RestoreGridCalibration()
+        {
+            m_QuestCalibrationEnabled = Application.platform == RuntimePlatform.Android &&
+                App.Config.m_SdkMode == SdkMode.UnityXR &&
+                SystemInfo.deviceModel.Contains("Quest", StringComparison.OrdinalIgnoreCase);
+            if (!m_QuestCalibrationEnabled)
+                return;
+
+            var position = new Vector3(PlayerPrefs.GetFloat(kCalibrationPreference + "X"),
+                PlayerPrefs.GetFloat(kCalibrationPreference + "Y"), PlayerPrefs.GetFloat(kCalibrationPreference + "Z"));
+            float yaw = PlayerPrefs.GetFloat(kCalibrationPreference + "Yaw");
+            if (float.IsFinite(yaw) && float.IsFinite(position.x) && float.IsFinite(position.y) && float.IsFinite(position.z))
+                m_GridCalibrationPose = TrTransform.TR(position, Quaternion.Euler(0f, yaw, 0f));
+        }
         public float GetGazePanelActivationRatio()
         {
             return m_CurrentPointableWidget != null
@@ -784,6 +843,14 @@ namespace TiltBrush
         {
             return m_CurrentGazeObject > -1 &&
                 m_PanelManager.GetAllPanels()[m_CurrentGazeObject].m_Panel == panel;
+        }
+
+        internal bool IsBrushPointingAtPanel()
+        {
+            return m_GazeResults != null &&
+                m_CurrentGazeObject >= 0 && m_CurrentGazeObject < m_GazeResults.Length &&
+                m_GazeResults[m_CurrentGazeObject].m_HitWithController &&
+                m_GazeResults[m_CurrentGazeObject].m_ControllerName == InputManager.ControllerName.Brush;
         }
 
         public SaveIconTool GetSaveIconTool()
@@ -1006,6 +1073,7 @@ namespace TiltBrush
             AutoOrientAfterRotation = true;
             m_RotationCursor.gameObject.SetActive(false);
 
+            RestoreGridCalibration();
             ResetGrabbedPose();
             m_SketchOrigin = m_SketchSurface.transform.position;
 
@@ -1063,6 +1131,16 @@ namespace TiltBrush
 
         void Update()
         {
+            if (GridCalibrationActive && !IsWorldCalibrationLocked)
+            {
+                // A room join can replace the local alignment with a shared world pose.
+                // Leave the saved personal calibration intact.
+                GridCalibrationActive = false;
+                EatGrabInput();
+            }
+            if (IsWorldCalibrationLocked && IsViewOnlyNavigationTool(m_SketchSurfacePanel.ActiveToolType))
+                m_SketchSurfacePanel.EnableDefaultTool();
+
             // TODO: we need to figure out what transform to pass in here!
             // Maybe best _just for now_ to use the scene transform?
             TrTransform scenePose = App.Scene.Pose;
@@ -1079,6 +1157,7 @@ namespace TiltBrush
         public bool IsFreepaintToolReady()
         {
             return
+                !GridCalibrationActive &&
                 !m_PinCushion.IsShowing() &&
                 !PointerManager.m_Instance.IsStraightEdgeProxyActive() &&
                 !InputManager.m_Instance.ControllersAreSwapping() &&
@@ -1224,7 +1303,8 @@ namespace TiltBrush
                             PointerManager.m_Instance.SetMainPointerPositionAndForward(vPointerPos, vPointerForward);
                         }
 
-                        m_SketchSurfacePanel.AllowDrawing(m_InputStateConfigs[(int)m_CurrentInputState].m_AllowDrawing);
+                        m_SketchSurfacePanel.AllowDrawing(!GridCalibrationActive &&
+                            m_InputStateConfigs[(int)m_CurrentInputState].m_AllowDrawing);
                         m_SketchSurfacePanel.UpdateCurrentTool();
 
                         bool hasSplinePreview = m_SketchSurfacePanel.ActiveTool is FreePaintTool freePaint &&
@@ -1451,7 +1531,7 @@ namespace TiltBrush
             // Don't allow controller swap in first run intro.
             // Don't allow controller swap if we're grabbing a widget.
             // Don't allow controller swap if a Logitech pen is present.
-            if (!TutorialManager.m_Instance.TutorialActive() &&
+            if (!GridCalibrationActive && !TutorialManager.m_Instance.TutorialActive() &&
                 m_GrabWidgetState == GrabWidgetState.None &&
                 !App.VrSdk.VrControls.LogitechPenIsPresent())
             {
@@ -1852,7 +1932,7 @@ namespace TiltBrush
                     break;
             }
 
-            if (!TutorialManager.m_Instance.TutorialActive() && m_CurrentGrabWidget == null)
+            if (m_CurrentGrabWidget == null && (!TutorialManager.m_Instance.TutorialActive() || IsUserGrabbingWorld()))
             {
                 UpdateGrab_World();
             }
@@ -1884,7 +1964,7 @@ namespace TiltBrush
             //certain tools don't allow us to mess with widgets
             // A touched panel may take priority over a stale right-hand world-
             // grab flag. Never override the left-hand world/two-hand swim route.
-            bool bWidgetManipOK = m_SketchSurfacePanel.DoesCurrentToolAllowWidgetManipulation() &&
+            bool bWidgetManipOK = !GridCalibrationActive && m_SketchSurfacePanel.DoesCurrentToolAllowWidgetManipulation() &&
                 !m_GrabWand.grabbingWorld &&
                 (!m_GrabBrush.grabbingWorld || rightHandPanelAvailable) &&
                 (IsGrabWorldStateStable() || rightHandPanelAvailable) &&
@@ -2672,7 +2752,7 @@ namespace TiltBrush
             }
 
             m_WorldTransformResetXf =
-                toSavedXf ? SketchMemoryScript.m_Instance.InitialSketchTransform : TrTransform.identity;
+                GetRoomResetPose(toSavedXf ? SketchMemoryScript.m_Instance.InitialSketchTransform : TrTransform.identity);
             m_WorldTransformResetState = WorldTransformResetState.Requested;
 
             App.Scene.disableTiltProtection = false;
@@ -2730,6 +2810,13 @@ namespace TiltBrush
 
         void UpdateGrab_World()
         {
+            if (IsWorldCalibrationLocked)
+            {
+                UpdateGridCalibrationGrab();
+                UpdateWorldSkyboxRotation();
+                return;
+            }
+
             bool bAllowWorldTransform = m_SketchSurfacePanel.ActiveTool.AllowWorldTransformation() &&
                 (m_GrabWorldState != GrabWorldState.ResetDone) &&
                 (!PointerManager.m_Instance.IsMainPointerCreatingStroke() || App.Instance.IsLoading()) &&
@@ -2783,22 +2870,7 @@ namespace TiltBrush
                 {
                     // Two-handed world movement.
                     m_WorldBeingGrabbed = true;
-                    TrTransform grabXfWand = TrTransform.FromTransform(
-                        InputManager.m_Instance.GetController(InputManager.ControllerName.Wand));
-                    TrTransform grabXfBrush = TrTransform.FromTransform(
-                        InputManager.m_Instance.GetController(InputManager.ControllerName.Brush));
-
-                    // Offset the controller positions so that they're centered on the grips.
-                    // Hand tracking already places each virtual controller root at
-                    // its physical palm-centre grab anchor. Applying the legacy
-                    // OculusTouch grip offset again shifts the world pivot away
-                    // from the hand. Keep that offset only for physical controllers.
-                    Vector3 gripPos = InputManager.Controllers[(int)InputManager.ControllerName.Brush].Geometry.GripAttachPoint.localPosition;
-                    gripPos.x = 0.0f;
-                    if (!AndroidXRHandBridge.UseHand(false))
-                        grabXfWand.translation += grabXfWand.MultiplyVector(gripPos);
-                    if (!AndroidXRHandBridge.UseHand(true))
-                        grabXfBrush.translation += grabXfBrush.MultiplyVector(gripPos);
+                    GetWorldGripTransforms(out var grabXfBrush, out var grabXfWand);
 
                     // Are we initiating two hand transform this frame?
                     if (!bWorldGrabWandPrev || !bWorldGrabBrushPrev)
@@ -2960,7 +3032,116 @@ namespace TiltBrush
                 AudioManager.m_Instance.PlayTransformResetSound();
             }
 
-            // Update the skybox rotation with the new scene rotation.
+            UpdateWorldSkyboxRotation();
+            m_AllowWorldTransformLastFrame = bAllowWorldTransform;
+        }
+
+        private void UpdateGridCalibrationGrab()
+        {
+            var input = InputManager.m_Instance;
+            bool wasBrushGrabbing = m_GrabBrush.grabbingWorld;
+            bool wasWandGrabbing = m_GrabWand.grabbingWorld;
+            bool wasGrabbing = wasBrushGrabbing || wasWandGrabbing;
+            bool controlAllowed = GridCalibrationActive && CanCalibrateGrid &&
+                !TutorialManager.m_Instance.TutorialActive() && !input.ControllersAreSwapping() &&
+                !PointerManager.m_Instance.IsMainPointerCreatingStroke();
+            bool brushGrabbing = controlAllowed && InputManager.Brush.IsTrackedObjectValid &&
+                !m_GrabBrush.eatInput && InputManager.Brush.GetControllerGrip();
+            bool wandGrabbing = controlAllowed && InputManager.Wand.IsTrackedObjectValid &&
+                !m_GrabWand.eatInput && InputManager.Wand.GetControllerGrip();
+
+            m_GrabBrush.grabbingWorld = brushGrabbing;
+            m_GrabWand.grabbingWorld = wandGrabbing;
+            bool grabbing = brushGrabbing || wandGrabbing;
+            m_WorldBeingGrabbed = grabbing;
+            if (wasGrabbing != grabbing)
+            {
+                RequestPanelsVisibility(!grabbing);
+                m_SketchSurfacePanel.RequestHideActiveTool(grabbing);
+                PointerManager.m_Instance.AllowPointerPreviewLine(!grabbing);
+                PointerManager.m_Instance.RequestPointerRendering(!grabbing && m_SketchSurfacePanel.ShouldShowPointer());
+                if (grabbing)
+                {
+                    PointerManager.m_Instance.EatLineEnabledInput();
+                    m_WidgetManager.WidgetsDormant = false;
+                }
+            }
+
+            if (wasBrushGrabbing != brushGrabbing || wasWandGrabbing != wandGrabbing)
+            {
+                var visual = (brushGrabbing, wandGrabbing) switch
+                {
+                    (true, true) => ControllerGrabVisuals.VisualState.WorldDoubleGrip,
+                    (true, false) => ControllerGrabVisuals.VisualState.WorldBrushGrip,
+                    (false, true) => ControllerGrabVisuals.VisualState.WorldWandGrip,
+                    _ => ControllerGrabVisuals.VisualState.Off
+                };
+                m_ControllerGrabVisuals.SetDesiredVisualState(visual);
+            }
+
+            if (!grabbing)
+                return;
+
+            Vector3? brush = brushGrabbing ? input.GetControllerPosition(InputManager.ControllerName.Brush) : null;
+            Vector3? wand = wandGrabbing ? input.GetControllerPosition(InputManager.ControllerName.Wand) : null;
+            if (!wasGrabbing)
+                AudioManager.m_Instance.WorldGrabbed(brush.HasValue && wand.HasValue
+                    ? (brush.Value + wand.Value) * 0.5f : (brush ?? wand).Value);
+
+            bool consecutive = m_LastCalibrationGripFrame == Time.frameCount - 1 &&
+                m_CalibrationWandOnRight == input.WandOnRight;
+            Vector3? brushBefore = consecutive && wasBrushGrabbing ? m_GrabBrush.grabTransform.translation : null;
+            Vector3? wandBefore = consecutive && wasWandGrabbing ? m_GrabWand.grabTransform.translation : null;
+            TrTransform pose = App.Scene.Pose;
+            TrTransform next = UpdateCalibrationPose(pose, brushBefore, wandBefore, brush, wand);
+            if (next != pose)
+                App.Scene.Pose = next;
+
+            if (brush.HasValue)
+                m_GrabBrush.grabTransform = TrTransform.T(brush.Value);
+            if (wand.HasValue)
+                m_GrabWand.grabTransform = TrTransform.T(wand.Value);
+            m_LastCalibrationGripFrame = Time.frameCount;
+            m_CalibrationWandOnRight = input.WandOnRight;
+        }
+
+        internal static TrTransform UpdateCalibrationPose(TrTransform pose, Vector3? brushBefore, Vector3? wandBefore,
+            Vector3? brushAfter, Vector3? wandAfter)
+        {
+            // Changing which hands are held establishes new anchors for the next frame.
+            if (brushBefore.HasValue != brushAfter.HasValue || wandBefore.HasValue != wandAfter.HasValue)
+                return pose;
+            if (brushBefore == null || wandBefore == null)
+            {
+                Vector3? motion = (brushAfter ?? wandAfter) - (brushBefore ?? wandBefore);
+                return motion.HasValue ? TrTransform.TR(pose.translation + motion.Value, pose.rotation) : pose;
+            }
+
+            Vector3 before = Vector3.ProjectOnPlane(wandBefore.Value - brushBefore.Value, Vector3.up);
+            Vector3 after = Vector3.ProjectOnPlane(wandAfter.Value - brushAfter.Value, Vector3.up);
+            const float minimumGripSeparation = 0.04f * App.METERS_TO_UNITS;
+            Quaternion yaw = before.sqrMagnitude >= minimumGripSeparation * minimumGripSeparation &&
+                after.sqrMagnitude >= minimumGripSeparation * minimumGripSeparation
+                ? Quaternion.AngleAxis(Vector3.SignedAngle(before, after, Vector3.up), Vector3.up)
+                : Quaternion.identity;
+            return TrTransform.TR(pose.translation, yaw * pose.rotation);
+        }
+
+        private static void GetWorldGripTransforms(out TrTransform brush, out TrTransform wand)
+        {
+            brush = TrTransform.FromTransform(InputManager.m_Instance.GetController(InputManager.ControllerName.Brush));
+            wand = TrTransform.FromTransform(InputManager.m_Instance.GetController(InputManager.ControllerName.Wand));
+            // Hand tracking already anchors each virtual controller at the user's palm center.
+            Vector3 grip = InputManager.Brush.Geometry.GripAttachPoint.localPosition;
+            grip.x = 0f;
+            if (!AndroidXRHandBridge.UseHand(false))
+                wand.translation += wand.MultiplyVector(grip);
+            if (!AndroidXRHandBridge.UseHand(true))
+                brush.translation += brush.MultiplyVector(grip);
+        }
+
+        private static void UpdateWorldSkyboxRotation()
+        {
             if (RenderSettings.skybox)
             {
                 Quaternion sceneQuaternion = App.Instance.m_SceneTransform.rotation;
@@ -2975,8 +3156,6 @@ namespace TiltBrush
                         new Vector4(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w));
                 }
             }
-            // Update last frame members.
-            m_AllowWorldTransformLastFrame = bAllowWorldTransform;
         }
 
         /// If lhs and rhs are overlapping, return the smallest vector that would
@@ -3875,8 +4054,8 @@ namespace TiltBrush
             if (m_GrabBrush.grabbingWorld && controller == InputManager.ControllerName.Brush)
             {
                 TrTransform scenePose = App.Scene.Pose;
-                if (scenePose.scale != 1 || scenePose.translation != Vector3.zero
-                    || scenePose.rotation != Quaternion.identity)
+                if (!IsWorldCalibrationLocked && (scenePose.scale != 1 || scenePose.translation != Vector3.zero
+                    || scenePose.rotation != Quaternion.identity))
                 {
                     geometry.ShowWorldTransformReset();
                 }
@@ -3885,8 +4064,8 @@ namespace TiltBrush
             else if (m_GrabWand.grabbingWorld && controller == InputManager.ControllerName.Wand)
             {
                 TrTransform scenePose = App.Scene.Pose;
-                if (scenePose.scale != 1 || scenePose.translation != Vector3.zero
-                    || scenePose.rotation != Quaternion.identity)
+                if (!IsWorldCalibrationLocked && (scenePose.scale != 1 || scenePose.translation != Vector3.zero
+                    || scenePose.rotation != Quaternion.identity))
                 {
                     geometry.ShowWorldTransformReset();
                 }
@@ -4079,18 +4258,10 @@ namespace TiltBrush
         {
             //update sketch surface position with offset to sweet spot
             m_SketchSurface.transform.position = m_PanelManager.GetSketchSurfaceResetPos();
-            if (everything)
-            {
-                if (!keepSceneTransform)
-                {
-                    App.Scene.Pose = TrTransform.identity;
-                }
-                Coords.CanvasLocalPose = TrTransform.identity;
-            }
             if (!keepSceneTransform)
-            {
-                App.Scene.Pose = TrTransform.identity;
-            }
+                App.Scene.Pose = GetRoomResetPose(TrTransform.identity);
+            if (everything)
+                Coords.CanvasLocalPose = TrTransform.identity;
 
             //reset orientation and pointer
             ResetSketchSurfaceOrientation();
@@ -4567,6 +4738,7 @@ namespace TiltBrush
 
         public void LoadSketch(SceneFileInfo fileInfo, bool quickload = false)
         {
+            SetGridCalibration(false);
             LightsControlScript.m_Instance.DiscoMode = false;
             m_WidgetManager.FollowingPath = false;
             m_WidgetManager.CameraPathsVisible = false;
@@ -5492,6 +5664,8 @@ namespace TiltBrush
         }
         public void ViewOnly(bool active)
         {
+            if (active)
+                SetGridCalibration(false);
             m_ViewOnly = active;
             if (active)
             {
@@ -5625,15 +5799,17 @@ namespace TiltBrush
 
         public void NewSketch(bool fade)
         {
-            bool keepSceneTransform = m_DisableWorldGrabbing;
+            SetGridCalibration(false);
+            bool keepSceneTransform = m_DisableWorldGrabbing && !IsWorldCalibrationLocked;
             LightsControlScript.m_Instance.DiscoMode = false;
             m_WidgetManager.FollowingPath = false;
             SketchMemoryScript.m_Instance.ClearMemory();
+            App.Scene.RestoreFloorHeight(0);
             ControllerConsoleScript.m_Instance.AddNewLine("Sketch Cleared");
             ResetGrabbedPose(
                 everything: true,
                 keepSceneTransform: keepSceneTransform);
-            if (keepSceneTransform)
+            if (keepSceneTransform || IsWorldCalibrationLocked)
             {
                 SketchMemoryScript.m_Instance.InitialSketchTransform =
                     App.Scene.Pose;
@@ -5690,7 +5866,7 @@ namespace TiltBrush
         private bool WorldIsReset(bool toSavedXf)
         {
             return App.Scene.Pose ==
-                (toSavedXf ? SketchMemoryScript.m_Instance.InitialSketchTransform : TrTransform.identity);
+                GetRoomResetPose(toSavedXf ? SketchMemoryScript.m_Instance.InitialSketchTransform : TrTransform.identity);
         }
 
         public bool IsCommandAvailable(GlobalCommands rEnum, int iParam = -1)
@@ -5832,6 +6008,7 @@ namespace TiltBrush
         {
             if (SceneSettings.m_Instance.IsTransitioning) { return false; }
             return SketchMemoryScript.m_Instance.HasVisibleObjects() ||
+                App.Scene.FloorHeightHalfInches != 0 || App.Scene.HasFloorHeightEdits ||
                 SceneSettings.m_Instance.EnvironmentChanged ||
                 LightsControlScript.m_Instance.LightsChanged ||
                 m_WidgetManager.ModelWidgets.Any(w => w.gameObject.activeSelf) ||

@@ -121,6 +121,8 @@ Shader "Brush/TransitionSurface"
             half4 Frag(Varyings input, FRONT_FACE_TYPE facing : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+                // The app's default mid-grey preserves the material's original tone.
+                half3 tint = lerp(0.25h, 1.75h, input.color.rgb);
                 if (input.surface.z > 0.5h)
                 {
                     half3 normal = NormalizeNormalPerPixel(input.normalWS) * IS_FRONT_VFACE(facing, 1.0h, -1.0h);
@@ -129,7 +131,7 @@ Shader "Brush/TransitionSurface"
                     half3 unused, highlights;
                     SurfaceLighting(input.positionWS, normal, view, 96.0h, 0.95h, unused, highlights);
                     half3 steel = half3(0.10h, 0.11h, 0.13h) + reflection * half3(0.92h, 0.95h, 1.0h) + highlights;
-                    return half4(MixFog(steel, input.fog), 1.0h);
+                    return half4(MixFog(steel * tint, input.fog), 1.0h);
                 }
                 float2 concreteUV = TRANSFORM_TEX(input.uv, _MainTex);
                 // UVs describe a 3 m repeat. Use whole multiples so grout and coping joints close with the loop.
@@ -171,14 +173,12 @@ Shader "Brush/TransitionSurface"
                 // Compress bright direct light smoothly to preserve contrast in the normal map.
                 half peak = Max3(diffuse.r, diffuse.g, diffuse.b);
                 half3 lighting = 0.33h + 0.10h * saturate(SampleSH(normal)) + diffuse * (0.85h / (0.75h + peak));
-                // The app's default mid-grey preserves the concrete's photographed tone.
-                half3 tint = lerp(0.25h, 1.75h, input.color.rgb);
                 half3 concrete = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, concreteUV).rgb;
                 half3 color = tint * concrete;
                 if (tileBand)
-                    color = lerp(half3(0.62h, 0.78h, 0.88h), half3(0.43h, 0.49h, 0.52h), grout);
+                    color = lerp(half3(0.62h, 0.78h, 0.88h) * tint, half3(0.43h, 0.49h, 0.52h), grout);
                 if (coping)
-                    color = lerp(concrete * 0.68h, half3(0.60h, 0.58h, 0.53h), copingJoint * 0.72h);
+                    color = lerp(concrete * 0.68h * tint, half3(0.60h, 0.58h, 0.53h), copingJoint * 0.72h);
                 if (deck)
                     color = tint * (concrete * 0.87h + 0.10h);
                 return half4(MixFog(color * lighting + specular, input.fog), 1.0h);

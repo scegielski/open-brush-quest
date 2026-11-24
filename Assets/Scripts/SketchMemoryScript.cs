@@ -71,8 +71,15 @@ namespace TiltBrush
             TransitionFixedHeading = 1 << 4,
             TransitionControllerHeading = 1 << 5,
             TransitionHeadingOffsets = 1 << 6,
-            // For these Transition splines, baked pressure stores a normalized deck depth.
+            // For these Transition strokes, baked pressure stores a normalized deck depth.
             TransitionVariableDeck = 1 << 7,
+            // Without an override, the brush descriptor supplies the transition's options.
+            TransitionSurfaceOverride = 1 << 8,
+            TransitionPoolCoping = 1 << 9,
+            TransitionSteelCoping = 1 << 10,
+            TransitionTile = 1 << 11,
+            TransitionDeck = 1 << 12,
+            SplineAutoOrient = 1 << 13,
         }
 
         // NOTE: making this generic is way more trouble than it's worth
@@ -814,12 +821,13 @@ namespace TiltBrush
             Color desiredColor = PointerManager.m_Instance.PointerColor;
 
             // Don't run unless there's something to change
+            bool applyJitter = jitter && PointerManager.m_Instance.JitterEnabled;
             if (
                 force ||
                 ((recolor && stroke.m_Color != desiredColor) ||
                 (rebrush && stroke.m_BrushGuid != desiredGuid) ||
                 (resize && stroke.m_BrushSize != desiredSize) ||
-                (jitter && PointerManager.m_Instance.JitterEnabled))
+                applyJitter)
             )
             {
                 if (m_RepaintStrokeParent == null)
@@ -837,11 +845,11 @@ namespace TiltBrush
                 GetRepaintParams(
                     stroke,
                     desiredGuid, desiredColor, desiredSize,
-                    rebrush, recolor, resize, jitter && PointerManager.m_Instance.JitterEnabled,
+                    rebrush, recolor, resize, applyJitter,
                     out Color newColor, out Guid newGuid, out float newSize
                 );
 
-                var positionJitter = PointerManager.m_Instance.positionJitter;
+                float positionJitter = applyJitter ? PointerManager.m_Instance.positionJitter : 0f;
                 if (positionJitter > 0)
                 {
                     // Jitter positions
@@ -879,11 +887,8 @@ namespace TiltBrush
         public bool MemorizeStrokeRepaint(GameObject rObject, bool recolor, bool rebrush, bool resize, bool jitter = false)
         {
             var brush = rObject.GetComponent<BaseBrushScript>();
-            if (brush)
-            {
-                MemorizeStrokeRepaint(brush.Stroke, recolor, rebrush, resize, jitter);
-                return true;
-            }
+            if (brush && brush.Stroke != null)
+                return MemorizeStrokeRepaint(brush.Stroke, recolor, rebrush, resize, jitter);
             return false;
         }
 

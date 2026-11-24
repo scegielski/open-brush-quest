@@ -1,0 +1,90 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c71b2ac88638c5c41a0a0681f70d2512, type: 3}
+  m_Name: PoolCopingTransition
+  m_EditorClassIdentifier:
+  m_Guid:
+    m_storage: de8c87b3-5d36-4673-be7f-c48f060ee96c
+  m_DurableName: Transition with Pool Coping
+  m_CreationVersion: 16.0
+  m_ShaderVersion: 10.0
+  m_BrushPrefab: {fileID: 100000, guid: 36a2d0b36eec49eb85031b0caff07f93, type: 3}
+  m_Tags:
+  - default
+  m_Nondeterministic: 0
+  m_Supersedes: {fileID: 0}
+  m_LooksIdentical: 0
+  m_ButtonTexture: {fileID: 2800000, guid: aa8c7bc4d61547dabbdb0206c3fe756d, type: 3}
+  m_LocalizedDescription:
+    m_TableReference:
+      m_TableCollectionName:
+    m_TableEntryReference:
+      m_KeyId: 0
+      m_Key:
+    m_FallbackState: 0
+    m_WaitForCompletion: 0
+    m_LocalVariables: []
+  m_DescriptionExtra: Concrete with pool coping and an adjustable deck. Click the drawing thumbstick to rotate the transition.
+  m_BrushAudioLayers:
+  - {fileID: 8300000, guid: 103bfb4f4d70ddc4e8ca851eda9568f2, type: 3}
+  - {fileID: 8300000, guid: c7079dc05177e3944bed833a35ba7563, type: 3}
+  - {fileID: 8300000, guid: 9fcf67238fab1c44596f5390b5ee1957, type: 3}
+  m_BrushAudioBasePitch: 1
+  m_BrushAudioMaxPitchShift: 0
+  m_BrushAudioMaxVolume: 1
+  m_BrushVolumeUpSpeed: 1.7
+  m_BrushVolumeDownSpeed: 1.5
+  m_VolumeVelocityRangeMultiplier: 1.5
+  m_AudioReactive: 0
+  m_ButtonAudio: {fileID: 0}
+  m_Material: {fileID: 2100000, guid: 7612a3225a944dd0adc0ab54128b053e, type: 2}
+  m_TestingMaterial: {fileID: 0}
+  m_OverlayMaterial: {fileID: 0}
+  m_TextureAtlasV: 1
+  m_TileRate: 0.01
+  m_UseBloomSwatchOnColorPicker: 0
+  m_BrushSizeRange: {x: 0.254, y: 152.4}
+  m_PressureSizeRange: {x: 1, y: 1}
+  m_SizeVariance: 0
+  m_PreviewPressureSizeMin: 0.001
+  m_Opacity: 1
+  m_PressureOpacityRange: {x: 1, y: 1}
+  m_ColorLuminanceMin: 0
+  m_ColorSaturationMax: 1
+  m_ParticleSpeed: 0
+  m_ParticleRate: 1
+  m_ParticleInitialRotationRange: 0
+  m_RandomizeAlpha: 0
+  m_SprayRateMultiplier: 1
+  m_RotationVariance: 360
+  m_PositionVariance: 0
+  m_SizeRatio: {x: 1, y: 1}
+  m_M11Compatibility: 1
+  m_SolidMinLengthMeters_PS: 0.002
+  m_TubeStoreRadiusInTexcoord0Z: 0
+  m_RenderBackfaces: 0
+  m_BackIsInvisible: 0
+  m_BackfaceHueShift: 0
+  m_BoundsPadding: 0
+  m_PlayBackAtStrokeGranularity: 1
+  m_BlendMode: 0
+  m_EmissiveFactor: 0
+  m_AllowExport: 1
+  m_SupportsSimplification: 0
+  m_HeadMinPoints: 1
+  m_HeadPointStep: 1
+  m_TailMinPoints: 1
+  m_TailPointStep: 1
+  m_MiddlePointStep: 0
+  references:
+    version: 2
+    RefIds: []

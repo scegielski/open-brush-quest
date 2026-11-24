@@ -326,8 +326,8 @@ namespace TiltBrush
                     wandBehavior.SetGripState(BaseControllerBehavior.GripState.Gripped);
                     brushBehavior.EnableTransformVisuals(true, 1.0f);
                     brushBehavior.SetGripState(BaseControllerBehavior.GripState.Gripped);
-                    m_AnimalRulerAnchor.gameObject.SetActive(true);
-                    m_AnimalRulerRequestVisible = true;
+                    m_AnimalRulerRequestVisible = !SketchControlsScript.m_Instance.GridCalibrationActive;
+                    m_AnimalRulerAnchor.gameObject.SetActive(m_AnimalRulerRequestVisible);
                     m_GaussianCaptureText.gameObject.SetActive(false);
                     break;
                 case VisualState.GaussianCaptureDoubleGrip:

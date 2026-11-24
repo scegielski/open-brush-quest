@@ -16,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using OpenBrush.Multiplayer;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -47,6 +48,71 @@ namespace TiltBrush
 
         private CanvasScript m_ActiveCanvas;
         private List<CanvasScript> m_LayerCanvases;
+        private int m_SavedFloorHeightHalfInches;
+
+        internal int FloorHeightHalfInches { get; private set; }
+        internal float FloorHeightCanvasUnits => FloorHeightHalfInches * (0.5f * TransitionBrush.UnitsPerInch);
+        internal bool HasFloorHeightEdits => FloorHeightHalfInches != m_SavedFloorHeightHalfInches;
+
+        internal bool CanEditFloorHeight => App.Instance != null && App.Instance.IsInStateThatAllowsPainting() &&
+            SketchControlsScript.m_Instance?.IsViewOnly != true &&
+            MultiplayerManager.m_Instance?.State != ConnectionState.IN_ROOM &&
+            PointerManager.m_Instance?.IsMainPointerCreatingStroke() != true;
+
+        internal void StepFloorHeight(int halfInchSteps)
+        {
+            long requested = (long)FloorHeightHalfInches + halfInchSteps;
+            int height = (int)Math.Max(int.MinValue, Math.Min(int.MaxValue, requested));
+            if (height != FloorHeightHalfInches && CanEditFloorHeight)
+            {
+                SketchMemoryScript.m_Instance.PerformAndRecordCommand(new FloorHeightCommand(this, height));
+            }
+        }
+
+        // Call when loading or clearing a sketch, before any strokes regenerate from memory.
+        internal void RestoreFloorHeight(int halfInches)
+        {
+            FloorHeightHalfInches = halfInches;
+            MarkFloorHeightSaved(halfInches);
+        }
+
+        internal void MarkFloorHeightSaved(int halfInches) => m_SavedFloorHeightHalfInches = halfInches;
+
+        private void ChangeFloorHeight(int halfInches)
+        {
+            FloorHeightHalfInches = halfInches;
+            bool geometryChanged = false;
+            foreach (var stroke in SketchMemoryScript.m_Instance.GetMemoryList)
+            {
+                if (stroke.m_Type == Stroke.Type.NotCreated ||
+                    !TransitionBrush.IsTransition(BrushCatalog.m_Instance.GetBrush(stroke.m_BrushGuid)))
+                    continue;
+
+                stroke.RebuildGeometryPreservingVisibility();
+                geometryChanged = true;
+            }
+
+            if (geometryChanged && SelectionManager.m_Instance.HasSelection)
+                SelectionManager.m_Instance.UpdateSelectionWidget();
+        }
+
+        private sealed class FloorHeightCommand : BaseCommand
+        {
+            private readonly SceneScript m_Scene;
+            private readonly int m_Before;
+            private readonly int m_After;
+
+            public FloorHeightCommand(SceneScript scene, int height)
+            {
+                m_Scene = scene;
+                m_Before = scene.FloorHeightHalfInches;
+                m_After = height;
+            }
+
+            public override bool NeedsSave => true;
+            protected override void OnRedo() => m_Scene.ChangeFloorHeight(m_After);
+            protected override void OnUndo() => m_Scene.ChangeFloorHeight(m_Before);
+        }
 
         /// Helper for getting and setting transforms on Transform components.
         /// Transform natively allows you to access parent-relative ("local")

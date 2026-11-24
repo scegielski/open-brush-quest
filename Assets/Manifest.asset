@@ -14,6 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Brushes:
   - {fileID: 11400000, guid: e5360d58d8d84dcea3c9c829e104ad4b, type: 2}
+  - {fileID: 11400000, guid: de8c87b35d364673be7fc48f060ee96c, type: 2}
   - {fileID: 11400000, guid: 90819f94bb074d6399aa3feca0e82c04, type: 2}
   - {fileID: 11400000, guid: 992dac8040fd4e949b36c7a7b731ac21, type: 2}
   - {fileID: 11400000, guid: 68b480eeafac402bbbc1339887d71001, type: 2}

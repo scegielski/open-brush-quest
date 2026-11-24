@@ -37,6 +37,10 @@ namespace TiltBrush
         override public void UpdateVisuals()
         {
             base.UpdateVisuals();
+            var controls = SketchControlsScript.m_Instance;
+            if (controls != null && controls.IsViewOnlyNavigationTool(m_Tool))
+                SetButtonAvailable(SketchSurfacePanel.IsToolAvailable(m_Tool));
+
             // Toggle buttons poll for status.
             if (m_ToggleButton)
             {
@@ -51,6 +55,9 @@ namespace TiltBrush
 
         override protected void OnButtonPressed()
         {
+            if (!SketchSurfacePanel.IsToolAvailable(m_Tool))
+                return;
+
             if (m_ToggleActive)
             {
                 SketchSurfacePanel.m_Instance.DisableSpecificTool(m_Tool);

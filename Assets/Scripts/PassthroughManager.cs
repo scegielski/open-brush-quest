@@ -19,12 +19,29 @@ using Unity.XR.CompositionLayers.Layers;
 using Unity.XR.CompositionLayers.Services;
 using Unity.XR.CoreUtils;
 using UnityEngine.XR.ARFoundation;
+using UnityEngine.XR.OpenXR.CompositionLayers;
 
 namespace TiltBrush
 {
     public class PassthroughManager : MonoBehaviour
     {
         [SerializeField] CompositionLayer m_PassthroughLayer;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void RegisterProviderCleanup()
+        {
+            OpenXRLayerProvider.Stopped -= ClearStoppedProviderLayers;
+            OpenXRLayerProvider.Stopped += ClearStoppedProviderLayers;
+        }
+
+        private static void ClearStoppedProviderLayers()
+        {
+            // OpenXR disposes the provider before detaching it from the manager. The
+            // empty active list also unregisters that provider's before-render callback.
+            // A stale callback can otherwise pause passthrough between live submissions.
+            if (CompositionLayerManager.Instance?.LayerProvider is OpenXRLayerProvider provider)
+                provider.UpdateLayers(null, null, null, null);
+        }
 
         // Lives on the passthrough environment prefab, so Start and OnDestroy bracket the time
         // the passthrough environment is active.

@@ -685,7 +685,9 @@ namespace TiltBrush
                 // Maybe ask the teleport tool to enforce proper bounds (since it knows how)
                 // instead of teleporting back to the origin? Then we could kill the hacky
                 // m_InhibitSceneReset API.
-                App.Scene.Pose = TrTransform.identity;
+                var controls = SketchControlsScript.m_Instance;
+                controls.SetGridCalibration(false);
+                App.Scene.Pose = controls.GetRoomResetPose(TrTransform.identity);
             }
 
             WidgetManager.m_Instance.SetHomePosition(m_DesiredEnvironment.m_WidgetHome);

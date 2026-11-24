@@ -30,8 +30,8 @@ namespace TiltBrush
 
         [ApiEndpoint(
             "snap.grid",
-            "Sets the current snapping grid. Size must be a supported value (0.1, 0.25, 0.5 ,1, 2, 3, 5",
-            "5"
+            "Sets the current snapping grid. Supported values are off, 1in, 4in, 6in, 8in, and 1ft",
+            "4in"
         )]
         public static void SetSnapGrid(string size)
         {

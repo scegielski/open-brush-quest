@@ -93,13 +93,15 @@ namespace TiltBrush
         public Texture2D m_ButtonTexture;
         [Tooltip("Name of the brush, in the UI and elsewhere")]
         public LocalizedString m_LocalizedDescription;
+        [SerializeField] private string m_DisplayName;
 
         public string Description
         {
             get
             {
+                string fallback = string.IsNullOrEmpty(m_DisplayName) ? m_DurableName : m_DisplayName;
                 if (m_LocalizedDescription == null || m_LocalizedDescription.IsEmpty)
-                    return m_DurableName;
+                    return fallback;
                 try
                 {
                     var locString = m_LocalizedDescription.GetLocalizedStringAsync().Result;
@@ -107,7 +109,7 @@ namespace TiltBrush
                 }
                 catch
                 {
-                    return m_DurableName;
+                    return fallback;
                 }
             }
         }

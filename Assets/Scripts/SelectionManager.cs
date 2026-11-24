@@ -75,12 +75,13 @@ namespace TiltBrush
         private BaseTool.ToolType m_ToolTypeBeforeGrabbingGroup;
 
         private float m_snappingAngle;
-        private float m_snappingGridSize;
-        private float m_ConfiguredSnappingGridSize = 0.1f;
+        private float m_ConfiguredSnappingGridSize = TransitionBrush.UnitsPerInch;
         private float[] m_AngleSnaps;
-        private float[] m_GridSnaps;
+        private static readonly int[] kGridSnapInches = { 0, 1, 4, 6, 8, 12 };
+        private const int kDefaultSnapGridIndex = 1;
+        private const int kDefaultSnapAngleIndex = 1;
         private int m_CurrentSnapAngleIndex;
-        private int m_CurrentSnapGridIndex;
+        private int m_CurrentSnapGridIndex = kDefaultSnapGridIndex;
 
         // As opposed to 'add to selection'.  When this is true, strokes picked up
         // by the selection tool will be removed from selected strokes.  When false, they'll be added
@@ -354,7 +355,7 @@ namespace TiltBrush
         public int CurrentSnapAngleIndex => m_CurrentSnapAngleIndex;
         public int CurrentSnapGridIndex => m_CurrentSnapGridIndex;
         public float SnappingAngle => m_snappingAngle;
-        public float SnappingGridSize => m_snappingGridSize;
+        public float SnappingGridSize => kGridSnapInches[m_CurrentSnapGridIndex] * TransitionBrush.UnitsPerInch;
         // Keep the chosen spacing available when the snap-grid option is Off.
         public float ConfiguredSnappingGridSize => m_ConfiguredSnappingGridSize;
 
@@ -588,7 +589,7 @@ namespace TiltBrush
             m_SelectionJoinTransforms = new Dictionary<Stroke, TrTransform>(new ReferenceComparer<Stroke>());
             m_SelectedWidgets = new HashSet<GrabWidget>();
             m_AngleSnaps = new[] { 0f, 15f, 30f, 45f, 60f, 75f, 90f };
-            m_GridSnaps = new[] { 0f, .1f, .25f, .5f, 1f, 2f, 3f, 5f };
+            SetSnappingAngle(kDefaultSnapAngleIndex);
         }
 
         public void CacheSelectionTool(SelectionTool tool)
@@ -599,6 +600,7 @@ namespace TiltBrush
         void Start()
         {
             m_SelectionWidget.SelectionTransformed += OnSelectionTransformed;
+            SetSnappingGridSize(m_CurrentSnapGridIndex);
         }
 
         void OnDestroy()
@@ -1419,10 +1421,22 @@ namespace TiltBrush
 
         public void SetSnappingGridSize(string gridSizeAsString)
         {
-            int requestedIndex = m_GridSnaps.Select(x => x.ToString()).ToList().FindIndex(x => x == gridSizeAsString);
+            string size = (gridSizeAsString ?? "").Trim().Replace(" ", "").ToLowerInvariant();
+            int requestedIndex = size switch
+            {
+                "off" or "0" => 0,
+                "1ft" or "1'" => Array.IndexOf(kGridSnapInches, 12),
+                _ => Array.FindIndex(kGridSnapInches, inches => size == $"{inches}in" || size == $"{inches}\"")
+            };
+            if (requestedIndex < 0 && float.TryParse(size, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float worldSize))
+            {
+                requestedIndex = Array.FindIndex(kGridSnapInches,
+                    inches => Mathf.Approximately(inches * TransitionBrush.UnitsPerInch, worldSize));
+            }
             if (requestedIndex < 0)
             {
-                Debug.LogWarning($"SetSnappingGridSize received an invalid angle of {gridSizeAsString}. Valid values: {string.Join(",", m_GridSnaps)}");
+                Debug.LogWarning($"Unsupported grid spacing '{gridSizeAsString}'. Choose Off, 1in, 4in, 6in, 8in or 1ft.");
                 return;
             }
             SetSnappingGridSize(requestedIndex);
@@ -1431,21 +1445,17 @@ namespace TiltBrush
         public void SetSnappingGridSize(int snapIndex)
         {
             m_CurrentSnapGridIndex = snapIndex;
-            m_snappingGridSize = m_GridSnaps[snapIndex];
+            float gridSize = SnappingGridSize;
+            if (gridSize > 0f)
+                m_ConfiguredSnappingGridSize = gridSize;
+
             if (m_SnapGridVisualization == null)
-            {
-                m_SnapGridVisualization = App.Scene.MainCanvas.GetComponentInChildren<SnapGrid3D>();
-            }
-            if (m_snappingGridSize > 0)
-            {
-                m_ConfiguredSnappingGridSize = m_snappingGridSize;
-                m_SnapGridVisualization.enabled = true;
-                m_SnapGridVisualization.gridInterval = m_snappingGridSize;
-            }
-            else
-            {
-                m_SnapGridVisualization.enabled = false;
-            }
+                m_SnapGridVisualization = App.Scene.MainCanvas.GetComponentInChildren<SnapGrid3D>(true);
+            if (m_SnapGridVisualization == null)
+                return;
+
+            m_SnapGridVisualization.enabled = gridSize > 0f;
+            m_SnapGridVisualization.gridInterval = gridSize;
         }
 
         // All transforms are in canvas space
@@ -1453,13 +1463,9 @@ namespace TiltBrush
         {
             float gridSize = SnappingGridSize;
             if (gridSize == 0) return position;
-            float round(float val) { return Mathf.Round(val / gridSize) * gridSize; }
-            Vector3 roundedCanvasPos = new Vector3(
-                m_EnableSnapTranslationX ? round(position.x) : position.x,
-                m_EnableSnapTranslationY ? round(position.y) : position.y,
-                m_EnableSnapTranslationZ ? round(position.z) : position.z
-            );
-            return roundedCanvasPos;
+            return FreePaintTool.RoundGridPosition(position, gridSize,
+                m_EnableSnapTranslationX, m_EnableSnapTranslationY, m_EnableSnapTranslationZ,
+                App.Scene.FloorHeightCanvasUnits);
         }
 
         // Input is in global space, the snapping is done in canvas space
@@ -1471,12 +1477,9 @@ namespace TiltBrush
         {
             if (gridSize == 0) return position_GS;
             Vector3 localCanvasPos = App.ActiveCanvas.transform.worldToLocalMatrix.MultiplyPoint3x4(position_GS);
-            float round(float val) { return Mathf.Round(val / gridSize) * gridSize; }
-            Vector3 roundedCanvasPos = new Vector3(
-                m_EnableSnapTranslationX ? round(localCanvasPos.x) : localCanvasPos.x,
-                m_EnableSnapTranslationY ? round(localCanvasPos.y) : localCanvasPos.y,
-                m_EnableSnapTranslationZ ? round(localCanvasPos.z) : localCanvasPos.z
-            );
+            Vector3 roundedCanvasPos = FreePaintTool.RoundGridPosition(localCanvasPos, gridSize,
+                m_EnableSnapTranslationX, m_EnableSnapTranslationY, m_EnableSnapTranslationZ,
+                App.Scene.FloorHeightCanvasUnits);
             return App.ActiveCanvas.transform.localToWorldMatrix.MultiplyPoint3x4(roundedCanvasPos);
         }
 

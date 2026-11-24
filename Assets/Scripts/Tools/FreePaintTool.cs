@@ -64,6 +64,7 @@ namespace TiltBrush
             if (!bEnable)
             {
                 SetSplinePreviewVisible(false);
+                HideTransitionSettingsPanel();
                 PointerManager.m_Instance.EnableLine(false);
                 WidgetManager.m_Instance.ResetActiveStencil();
                 EndBimanualTape();
@@ -220,18 +221,15 @@ namespace TiltBrush
                     else
                     {
                         InputManager.Brush.Geometry.ShowBrushSizer();
-                        if (IsSplineMode && PanelManager.m_Instance.AdvancedModeActive())
+                        if (UsesSplinePreview)
                         {
-                            InputManager.Brush.Geometry.ShowSplineModeHint(m_SplineMode == SplineMode.Edit);
-                            if (m_SplineMode == SplineMode.Edit)
+                            InputManager.Brush.Geometry.ShowSplineModeHint(editing: true);
+                            if (PanelManager.m_Instance.AdvancedModeActive())
                                 InputManager.Brush.Geometry.ShowPinCushion();
                         }
-                        else if (PanelManager.m_Instance.AdvancedModeActive())
+                        else if (m_BimanualTape)
                         {
-                            if (m_BimanualTape)
-                                InputManager.Brush.Geometry.TogglePadRevolverHint(m_RevolverActive, enabled: true);
-                            else
-                                InputManager.Brush.Geometry.TogglePadLazyInputHint(m_LazyInputActive, m_LazyInputTangentMode, enabled: true);
+                            InputManager.Brush.Geometry.TogglePadRevolverHint(m_RevolverActive, enabled: true);
                         }
                         else
                         {
@@ -286,6 +284,7 @@ namespace TiltBrush
             {
                 pos_GS = SnapToGrid(pos_GS);
             }
+            rot_GS = SnapBrushAngle(rot_GS, Quaternion.identity);
 
             if (PointerManager.m_Instance.positionJitter > 0)
             {
@@ -311,6 +310,15 @@ namespace TiltBrush
             PointerManager.m_Instance.SetPointerTransform(InputManager.ControllerName.Brush, pos_GS, rot_GS);
         }
 
+        private static Quaternion SnapBrushAngle(Quaternion rotation, Quaternion roomFromSpace)
+        {
+            var selection = SelectionManager.m_Instance;
+            if (selection == null || selection.CurrentSnapAngleIndex == 0)
+                return rotation;
+            Quaternion sceneFromSpace = Quaternion.Inverse(App.Scene.Pose.rotation) * roomFromSpace;
+            return Quaternion.Inverse(sceneFromSpace) * selection.QuantizeAngle(sceneFromSpace * rotation);
+        }
+
         private float m_TransitionRadiusStep;
 
         override public void UpdateSize(float fAdjustAmount)
@@ -324,7 +332,8 @@ namespace TiltBrush
                 if (increments != 0)
                 {
                     m_TransitionRadiusStep -= increments;
-                    PointerManager.m_Instance.SetTransitionRadius(TransitionBrush.RadiusInches + increments);
+                    PointerManager.m_Instance.SetTransitionRadiusHalfInches(
+                        TransitionBrush.RadiusHalfInches + increments * 2);
                 }
                 return;
             }

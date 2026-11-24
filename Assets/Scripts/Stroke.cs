@@ -511,13 +511,18 @@ namespace TiltBrush
             });
         }
 
+        internal void RebuildGeometryPreservingVisibility() => RebuildPreservingVisibility(null);
+
         private void RebuildPreservingVisibility(Action replaceData)
         {
             bool hadGeometry = m_Type != Type.NotCreated;
             bool wasEnabled = hadGeometry && IsGeometryEnabled;
             if (hadGeometry) { Uncreate(); }
-            replaceData();
-            InvalidateCopy();
+            if (replaceData != null)
+            {
+                replaceData();
+                InvalidateCopy();
+            }
             if (hadGeometry)
             {
                 Recreate();

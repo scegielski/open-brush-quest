@@ -848,6 +848,10 @@ namespace TiltBrush
         public string[] RequiredCapabilities { get; set; }
         public TrTransform ThumbnailCameraTransformInRoomSpace = TrTransform.identity;
         public TrTransform SceneTransformInRoomSpace = TrTransform.identity;
+        public int FloorHeightHalfInches;
+
+        public bool ShouldSerializeFloorHeightHalfInches() => FloorHeightHalfInches != 0;
+
         // Callback for JSON.net (name is magic and special)
         public bool ShouldSerializeSceneTransformInRoomSpace()
         {

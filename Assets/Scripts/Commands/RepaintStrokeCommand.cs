@@ -16,6 +16,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using StrokeFlags = TiltBrush.SketchMemoryScript.StrokeFlags;
 
 namespace TiltBrush
 {
@@ -28,20 +29,12 @@ namespace TiltBrush
         private List<Color> m_EndColors;
         private List<Guid> m_EndGuids;
         private List<float> m_EndSizes;
+        private List<StrokeFlags> m_StartSurfaceOptions;
 
         public RepaintStrokeCommand(
-            Stroke stroke, Color newcolor, Guid newGuid, float newSize, BaseCommand parent = null) : base(parent)
-        {
-            m_TargetStrokes = new List<Stroke> { stroke };
-
-            m_StartColors = new List<Color> { stroke.m_Color };
-            m_StartGuids = new List<Guid> { stroke.m_BrushGuid };
-            m_StartSizes = new List<float> { stroke.m_BrushSize };
-
-            m_EndColors = new List<Color> { newcolor };
-            m_EndGuids = new List<Guid> { newGuid };
-            m_EndSizes = new List<float> { newSize };
-        }
+            Stroke stroke, Color newcolor, Guid newGuid, float newSize, BaseCommand parent = null)
+            : this(new List<Stroke> { stroke }, new List<Color> { newcolor }, new List<Guid> { newGuid },
+                new List<float> { newSize }, parent) { }
 
         public RepaintStrokeCommand(List<Stroke> strokes, List<Color> newcolors, List<Guid> newGuids, List<float> newSizes, BaseCommand parent = null) : base(parent)
         {
@@ -50,6 +43,7 @@ namespace TiltBrush
             m_StartColors = strokes.Select(s => s.m_Color).ToList();
             m_StartGuids = strokes.Select(s => s.m_BrushGuid).ToList();
             m_StartSizes = strokes.Select(s => s.m_BrushSize).ToList();
+            m_StartSurfaceOptions = strokes.Select(s => s.m_Flags & TransitionBrush.SurfaceOptionFlags).ToList();
 
             m_EndColors = newcolors.ToList();
             m_EndGuids = newGuids.ToList();
@@ -58,12 +52,14 @@ namespace TiltBrush
 
         public override bool NeedsSave { get { return true; } }
 
-        private void ApplyColorAndBrushToObject(Stroke stroke, Color color, Guid brushGuid, float brushSize)
+        private void ApplyColorAndBrushToObject(Stroke stroke, Color color, Guid brushGuid, float brushSize,
+            StrokeFlags surfaceOptions)
         {
             stroke.m_Color = ColorPickerUtils.ClampLuminance(
                 color, BrushCatalog.m_Instance.GetBrush(brushGuid).m_ColorLuminanceMin);
             stroke.m_BrushGuid = brushGuid;
             stroke.m_BrushSize = brushSize;
+            stroke.m_Flags = (stroke.m_Flags & ~TransitionBrush.SurfaceOptionFlags) | surfaceOptions;
             stroke.InvalidateCopy();
             stroke.Uncreate();
             stroke.Recreate();
@@ -73,7 +69,8 @@ namespace TiltBrush
         {
             for (var i = 0; i < m_TargetStrokes.Count; i++)
             {
-                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_EndColors[i], m_EndGuids[i], m_EndSizes[i]);
+                StrokeFlags options = m_EndGuids[i] == m_StartGuids[i] ? m_StartSurfaceOptions[i] : StrokeFlags.None;
+                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_EndColors[i], m_EndGuids[i], m_EndSizes[i], options);
             }
         }
 
@@ -81,7 +78,8 @@ namespace TiltBrush
         {
             for (var i = 0; i < m_TargetStrokes.Count; i++)
             {
-                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_StartColors[i], m_StartGuids[i], m_StartSizes[i]);
+                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_StartColors[i], m_StartGuids[i], m_StartSizes[i],
+                    m_StartSurfaceOptions[i]);
             }
         }
     }

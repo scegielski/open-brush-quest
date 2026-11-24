@@ -549,6 +549,7 @@ namespace TiltBrush
             m_LastThumbnailBytes = snapshot.Thumbnail;
             if (error == null && !selectedOnly)
             {
+                App.Scene.MarkFloorHeightSaved(snapshot.FloorHeightHalfInches);
                 SketchMemoryScript.m_Instance.SetLastOperationStackCount(
                     snapshot.UnrecordedChangesRevision);
                 SketchMemoryScript.m_Instance.InitialSketchTransform = App.Scene.Pose;
@@ -755,9 +756,11 @@ namespace TiltBrush
                     }
                     App.Instance.SetOdsCameraTransforms(jsonData.ThumbnailCameraTransformInRoomSpace,
                         jsonData.SceneTransformInRoomSpace);
-                    App.Scene.Pose = jsonData.SceneTransformInRoomSpace;
+                    var controls = SketchControlsScript.m_Instance;
+                    controls.SetGridCalibration(false);
+                    App.Scene.Pose = controls.GetRoomResetPose(jsonData.SceneTransformInRoomSpace);
                     App.Scene.ResetLayers(true);
-                    LastThumbnail_SS = App.Scene.Pose.inverse *
+                    LastThumbnail_SS = jsonData.SceneTransformInRoomSpace.inverse *
                         jsonData.ThumbnailCameraTransformInRoomSpace;
 
                 }
@@ -823,8 +826,10 @@ namespace TiltBrush
 
                 if (!bAdditive)
                 {
+                    App.Scene.RestoreFloorHeight(jsonData.FloorHeightHalfInches);
                     ModelCatalog.m_Instance.ClearMissingModels();
-                    SketchMemoryScript.m_Instance.InitialSketchTransform = jsonData.SceneTransformInRoomSpace;
+                    SketchMemoryScript.m_Instance.InitialSketchTransform =
+                        SketchControlsScript.m_Instance.GetRoomResetPose(jsonData.SceneTransformInRoomSpace);
 
                     LoadWidgetMetadata(jsonData, fileInfo);
 

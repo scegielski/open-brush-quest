@@ -32,23 +32,27 @@ namespace TiltBrush
             return res;
         }
 
-        internal static Vector3 RoundGridPosition(Vector3 point, float spacing, bool x, bool y, bool z)
+        internal static Vector3 RoundGridPosition(Vector3 point, float spacing, bool x, bool y, bool z,
+            float floorHeight = 0f)
         {
             return new Vector3(
                 x ? Mathf.Round(point.x / spacing) * spacing : point.x,
-                y ? Mathf.Round(point.y / spacing) * spacing : point.y,
+                y ? Mathf.Round((point.y - floorHeight) / spacing) * spacing + floorHeight : point.y,
                 z ? Mathf.Round(point.z / spacing) * spacing : point.z);
         }
 
         public static Vector3 SnapToGrid(Vector3 position, bool allowAxisSlide = true)
         {
-            float gridSubdivision = SelectionManager.m_Instance.SnappingGridSize;
             var selection = SelectionManager.m_Instance;
-            Transform grid = App.Scene.MainCanvas.transform;
+            float gridSubdivision = selection.SnappingGridSize;
+            if (gridSubdivision <= 0f)
+                return position;
+
+            Transform grid = App.ActiveCanvas.transform;
             Vector3 localCanvasPos = grid.InverseTransformPoint(position);
             Vector3 roundedCanvasPos = RoundGridPosition(localCanvasPos, gridSubdivision,
                 selection.m_EnableSnapTranslationX, selection.m_EnableSnapTranslationY,
-                selection.m_EnableSnapTranslationZ);
+                selection.m_EnableSnapTranslationZ, App.Scene.FloorHeightCanvasUnits);
             if (!allowAxisSlide)
                 return grid.TransformPoint(roundedCanvasPos);
 

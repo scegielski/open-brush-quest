@@ -23,6 +23,7 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.XR;
 using UnityEngine.XR.Management;
 using UnityEngine.XR.OpenXR;
+using Unity.XR.CoreUtils;
 using InputDevice = UnityEngine.XR.InputDevice;
 
 namespace TiltBrush
@@ -235,7 +236,7 @@ namespace TiltBrush
                 // Monoscopic
                 // ---------------------------------------------------------------------------------------- //
                 m_VrCamera.gameObject.AddComponent<MonoCameraControlScript>();
-                var xrOrigin = m_VrCamera.GetComponentInParent<Unity.XR.CoreUtils.XROrigin>();
+                var xrOrigin = m_VrCamera.GetComponentInParent<XROrigin>();
                 xrOrigin.CameraFloorOffsetObject.transform.localPosition = new Vector3(0.0f, 1.5f, 0.0f);
                 SetControllerStyle(ControllerStyle.None);
             }
@@ -254,9 +255,17 @@ namespace TiltBrush
             if (App.UserConfig.Flags.DisableXrMode || App.UserConfig.Flags.EnableMonoscopicMode) return;
 
             // Handheld AR and no-headset builds may omit the OpenXR native plugin.
-            if (XRGeneralSettings.Instance?.Manager?.activeLoader is OpenXRLoader)
+            if (XRGeneralSettings.Instance?.Manager?.activeLoader is OpenXRLoader loader)
             {
                 OpenXRSettings.SetAllowRecentering(false);
+                // Quest construction uses the calibrated floor as room Y=0.
+                if (Application.platform == RuntimePlatform.Android && PassthroughMode == PassthroughMode.FBPassthrough &&
+                    loader.GetLoadedSubsystem<XRInputSubsystem>() is { } input &&
+                    input.GetTrackingOriginMode() != TrackingOriginModeFlags.Floor &&
+                    m_VrCamera.GetComponentInParent<XROrigin>() is { } origin)
+                {
+                    origin.RequestedTrackingOriginMode = XROrigin.TrackingOriginMode.Floor;
+                }
             }
         }
 

@@ -13,8 +13,9 @@
 // limitations under the License.
 
 
-using System.Collections.Generic;
-using System.Linq;
+using TMPro;
+using UnityEngine;
+
 namespace TiltBrush
 {
 
@@ -32,6 +33,99 @@ namespace TiltBrush
 
     public class SnapSettingsPanel : BasePanel
     {
+        [SerializeField] private TextActionButton m_CalibrationButton;
+        [SerializeField] private TextMeshPro m_CalibrationHint;
+        [SerializeField] private TextMeshPro m_FloorHeightValue;
+        [SerializeField] private ActionButton[] m_FloorHeightButtons;
+
+        private TextMeshPro m_CalibrationLabel;
+        private (bool Available, bool Active)? m_CalibrationState;
+        private int? m_DisplayedFloorHeight;
+        private bool? m_FloorHeightAvailable;
+
+        public override void InitPanel()
+        {
+            base.InitPanel();
+            m_CalibrationLabel = m_CalibrationButton.GetComponentInChildren<TextMeshPro>();
+            UpdateCalibrationControls();
+            UpdateFloorHeight();
+        }
+
+        private void Update()
+        {
+            BaseUpdate();
+            if (m_CalibrationLabel == null)
+                return;
+
+            UpdateCalibrationControls();
+            UpdateFloorHeight();
+        }
+
+        public void ToggleGridCalibration()
+        {
+            var controls = SketchControlsScript.m_Instance;
+            if (controls == null)
+                return;
+
+            controls.SetGridCalibration(!controls.GridCalibrationActive);
+            UpdateCalibrationControls();
+        }
+
+        public override void OnWidgetHide()
+        {
+            base.OnWidgetHide();
+            var controls = SketchControlsScript.m_Instance;
+            if (controls != null && controls.GridCalibrationActive)
+                controls.SetGridCalibration(false);
+        }
+
+        public void StepFloorHeight(int halfInchSteps)
+        {
+            if (App.Instance == null || App.Scene == null)
+                return;
+
+            App.Scene.StepFloorHeight(halfInchSteps);
+            UpdateFloorHeight();
+        }
+
+        private void UpdateFloorHeight()
+        {
+            var scene = App.Instance != null ? App.Scene : null;
+            bool available = scene != null && scene.CanEditFloorHeight;
+            if (m_FloorHeightAvailable != available)
+            {
+                foreach (var button in m_FloorHeightButtons)
+                    button.SetButtonAvailable(available);
+                m_FloorHeightAvailable = available;
+            }
+
+            int height = scene != null ? scene.FloorHeightHalfInches : 0;
+            if (m_DisplayedFloorHeight != height)
+            {
+                long magnitude = System.Math.Abs((long)height);
+                string sign = height < 0 ? "-" : height > 0 ? "+" : "";
+                string fraction = magnitude % 2 != 0 ? ".5" : "";
+                m_FloorHeightValue.text = $"{sign}{magnitude / 24} ft {magnitude % 24 / 2}{fraction} in";
+                m_DisplayedFloorHeight = height;
+            }
+        }
+
+        private void UpdateCalibrationControls()
+        {
+            var controls = SketchControlsScript.m_Instance;
+            bool active = controls != null && controls.GridCalibrationActive;
+            bool available = active || (controls != null && controls.CanCalibrateGrid);
+            var state = (Available: available, Active: active);
+            if (m_CalibrationState == state)
+                return;
+
+            if (m_CalibrationState?.Available != available)
+                m_CalibrationButton.SetButtonAvailable(available);
+            m_CalibrationButton.SetButtonSelected(active);
+            m_CalibrationLabel.text = active ? "Finish Calibration" : "Calibrate Grid";
+            m_CalibrationHint.text = available ? "One grip to move\nTwo grips to rotate" : "";
+            m_CalibrationState = state;
+        }
 
         public void HandleToggle(SnapSettingsPanelToggleButton btn)
         {

@@ -26502,6 +26502,22 @@ MonoBehaviour:
     m_Advanced: 0
     m_ViewOnly: 1
     m_Multiplayer: 0
+  - m_PanelPrefab: {fileID: 199434, guid: fb4ab71874bd4d15ac7ce36fe38756ee, type: 3}
+    m_ModeVr: 1
+    m_ModeMono: 0
+    m_ModeQuest: 1
+    m_Basic: 1
+    m_Advanced: 1
+    m_ViewOnly: 0
+    m_Multiplayer: 0
+  - m_PanelPrefab: {fileID: 199434, guid: 80028b226d76402ca4f03b544ef1dc86, type: 3}
+    m_ModeVr: 1
+    m_ModeMono: 0
+    m_ModeQuest: 1
+    m_Basic: 1
+    m_Advanced: 1
+    m_ViewOnly: 0
+    m_Multiplayer: 0
   m_WandPanelsRotationFeedbackInterval: 20
   m_WandPanelsRotationScalar: 200
   m_WandPanelsRotationVelocityScalar: 7500
@@ -26533,7 +26549,7 @@ MonoBehaviour:
   m_WandPaneVisualsColorOK: {r: 0.3529412, g: 0.3529412, b: 0.3529412, a: 1}
   m_WandPaneVisualsColorBad: {r: 1, g: 0, b: 0, a: 1}
   m_WandPaneVisualsShowSpeed: 8
-  m_PanelMipmapBias: -0.5
+  m_PanelMipmapBias: 0
   m_PanelHighlightActiveColor: {r: 1, g: 1, b: 1, a: 1}
   m_PanelHighlightInactiveColor: {r: 0.3529412, g: 0.3529412, b: 0.3529412, a: 1}
   m_PanelBorderMeshBaseColor: {r: 1, g: 1, b: 1, a: 1}

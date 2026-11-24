@@ -506,7 +506,8 @@ namespace TiltBrush
                 type == BasePanel.PanelType.AppSettings || type == BasePanel.PanelType.AppSettingsMobile ||
                 type == BasePanel.PanelType.Sketchbook || type == BasePanel.PanelType.SketchbookMobile ||
                 type == BasePanel.PanelType.Camera || type == BasePanel.PanelType.MemoryWarning ||
-                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary;
+                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary ||
+                type == BasePanel.PanelType.Spline || type == BasePanel.PanelType.TransitionSettings;
         }
 
         // Core panels are those that exist in the basic mode experience.  Practically, those that
@@ -571,28 +572,34 @@ namespace TiltBrush
                     continue;
                 }
 
-                if (!App.Instance.StartupError && m_PanelMap[i].IsValidForSdkMode(App.Config.m_SdkMode))
+                PanelMapKey key = m_PanelMap[i];
+                if (!App.Instance.StartupError && key.IsValidForSdkMode(App.Config.m_SdkMode))
                 {
-                    // Only create one of our unique panels
+                    // Use the prefab's type to identify shared panels with sparse enum values.
+                    if (key.m_Basic && key.m_Advanced)
+                    {
+                        type = key.m_PanelPrefab.GetComponent<BasePanel>().Type;
+                    }
+
+                    // Only create one of our unique panels.
                     if (IsPanelUnique(type))
                     {
-                        CreatePanel(m_PanelMap[i], false);
+                        CreatePanel(key, false);
                     }
                     else
                     {
                         // Create a panel for each mode.
-                        if (m_PanelMap[i].m_Basic)
+                        if (key.m_Basic)
                         {
-                            CreatePanel(m_PanelMap[i], false);
+                            CreatePanel(key, false);
                         }
-                        if (m_PanelMap[i].m_Advanced)
+                        if (key.m_Advanced)
                         {
-                            CreatePanel(m_PanelMap[i], true);
+                            CreatePanel(key, true);
                         }
-                        if (!m_PanelMap[i].m_Basic && !m_PanelMap[i].m_Advanced &&
-                            (m_PanelMap[i].m_ViewOnly || m_PanelMap[i].m_Multiplayer))
+                        if (!key.m_Basic && !key.m_Advanced && (key.m_ViewOnly || key.m_Multiplayer))
                         {
-                            CreatePanel(m_PanelMap[i], false);
+                            CreatePanel(key, false);
                         }
                     }
                 }

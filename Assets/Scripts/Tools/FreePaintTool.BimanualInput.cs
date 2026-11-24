@@ -221,8 +221,7 @@ namespace TiltBrush
 
         public override bool BlockPinCushion()
         {
-            return m_BimanualTape ||
-                (m_SplineMode == SplineMode.Edit && PanelManager.m_Instance.AdvancedModeActive());
+            return m_BimanualTape;
         }
 
         void ApplyBimanualTape(ref Vector3 pos, ref Quaternion rot)
