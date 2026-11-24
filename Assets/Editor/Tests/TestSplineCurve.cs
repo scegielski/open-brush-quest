@@ -40,6 +40,21 @@ namespace TiltBrush
 
         private readonly List<TrTransform> m_Samples = new();
 
+        [TestCase(false)]
+        [TestCase(true)]
+        public void SplineModePressWaitsForReleaseAndDisarmsDuringDrawing(bool interrupted)
+        {
+            bool armed = false;
+            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, true, false), Is.False);
+            for (int frame = 0; frame < 100; frame++)
+                Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, false), Is.False);
+            if (interrupted)
+                Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, false, false, false), Is.False);
+            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, true), Is.EqualTo(!interrupted));
+            Assert.That(armed, Is.False);
+            Assert.That(FreePaintTool.SplineModeButtonReleased(ref armed, true, false, true), Is.False);
+        }
+
         [Test]
         public void OpenCubicCurveClampsTheEndsAndBlendsTheInteriorControls()
         {
@@ -97,6 +112,12 @@ namespace TiltBrush
                     TrTransform.TR(new Vector3(0.2f, 0.8f, 2f), Quaternion.Euler(15, 32, 9)),
                     TrTransform.T(new Vector3(3f, 1f, 2f))
                 };
+                var deckDepths = new[] { 0f, 58f, 91f };
+                if (!legacy)
+                {
+                    for (int i = 0; i < knots.Length; i++)
+                        knots[i].scale = deckDepths[i] / TransitionBrush.DefaultDeckDepthInches;
+                }
                 SplineCurve.Sample(knots, m_Samples, closed);
                 if (legacy)
                 {
@@ -113,17 +134,21 @@ namespace TiltBrush
                     m_BrushSize = 0.15f,
                     m_SplineKnotCount = knots.Length,
                     m_SplineControlPoints = legacy ? null : knots,
-                    m_ControlPoints = m_Samples.Select(point => new PointerManager.ControlPoint
+                    m_Flags = legacy ? SketchMemoryScript.StrokeFlags.None :
+                        SketchMemoryScript.StrokeFlags.TransitionVariableDeck,
+                    m_ControlPoints = m_Samples.Select((point, i) => new PointerManager.ControlPoint
                     {
                         m_Pos = point.translation,
                         m_Orient = point.rotation,
-                        m_Pressure = 1
+                        m_Pressure = legacy ? 1 :
+                            SplineCurve.SampleDeckScale(knots, i, closed) *
+                            (TransitionBrush.DefaultDeckDepthInches / (float)TransitionBrush.MaxDeckDepthInches)
                     }).ToArray()
                 };
                 var ordinaryStroke = new StrokeData(stroke) { m_SplineKnotCount = 0, m_SplineControlPoints = null };
                 var snapshots = new[]
                 {
-                    new SketchWriter.AdjustedMemoryBrushStroke { strokeData = stroke },
+                    new SketchWriter.AdjustedMemoryBrushStroke { strokeData = stroke, adjustedStrokeFlags = stroke.m_Flags },
                     new SketchWriter.AdjustedMemoryBrushStroke { strokeData = ordinaryStroke }
                 };
                 using var bytes = new MemoryStream();
@@ -144,8 +169,26 @@ namespace TiltBrush
                 Assert.That(SplineCurve.IsEditable(loaded[1]), Is.False);
                 Assert.That(loaded[0].m_SplineControlPoints == null, Is.EqualTo(legacy));
                 Assert.That(loaded[0].m_BrushGuid, Is.EqualTo(stroke.m_BrushGuid));
+                Assert.That(TransitionBrush.HasVariableDeck(loaded[0]), Is.EqualTo(!legacy));
+                int stride = SplineCurve.SamplesPerSegment;
                 for (int i = 0; i < knots.Length; i++)
-                    Assert.That(SplineCurve.GetAuthoredPoint(loaded[0], i), Is.EqualTo(knots[i]));
+                {
+                    TrTransform loadedKnot = SplineCurve.GetAuthoredPoint(loaded[0], i);
+                    Assert.That(loadedKnot.translation, Is.EqualTo(knots[i].translation));
+                    Assert.That(loadedKnot.rotation, Is.EqualTo(knots[i].rotation));
+                    if (!legacy)
+                    {
+                        Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[i * stride].m_Pressure),
+                            Is.EqualTo(deckDepths[i]).Within(1e-4f));
+                    }
+                }
+                if (!legacy)
+                {
+                    Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[stride / 2].m_Pressure),
+                        Is.EqualTo(29f).Within(1e-4f));
+                    Assert.That(TransitionBrush.DecodeDeckDepth(loaded[0].m_ControlPoints[^1].m_Pressure),
+                        Is.EqualTo(closed ? deckDepths[0] : deckDepths[^1]).Within(1e-4f));
+                }
             }
             finally
             {

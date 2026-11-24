@@ -71,6 +71,8 @@ namespace TiltBrush
             TransitionFixedHeading = 1 << 4,
             TransitionControllerHeading = 1 << 5,
             TransitionHeadingOffsets = 1 << 6,
+            // For these Transition splines, baked pressure stores a normalized deck depth.
+            TransitionVariableDeck = 1 << 7,
         }
 
         // NOTE: making this generic is way more trouble than it's worth

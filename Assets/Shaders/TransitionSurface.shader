@@ -48,6 +48,7 @@ Shader "Brush/TransitionSurface"
                 half4 tangentOS : TANGENT;
                 half4 color : COLOR;
                 float2 uv : TEXCOORD0;
+                float3 surface : TEXCOORD1;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -59,6 +60,7 @@ Shader "Brush/TransitionSurface"
                 half fog : TEXCOORD2;
                 half4 tangentWS : TEXCOORD3;
                 float3 positionWS : TEXCOORD4;
+                half deck : TEXCOORD5;
                 half4 color : COLOR;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -76,46 +78,76 @@ Shader "Brush/TransitionSurface"
                     input.tangentOS.w * GetOddNegativeScale());
                 output.fog = ComputeFogFactor(output.positionCS.z);
                 output.color = input.color;
-                output.uv = TRANSFORM_TEX(input.uv, _MainTex);
+                output.uv = input.uv;
+                output.deck = input.surface.x;
                 return output;
             }
 
-            void AccumulateLight(Light light, half3 normal, half3 view, half roughness,
+            half Joint(float coordinate, float halfWidth)
+            {
+                float distance = abs(frac(coordinate + 0.5) - 0.5);
+                float footprint = fwidth(coordinate);
+                float antialias = max(footprint * 0.5, 0.001);
+                float joint = 1.0 - smoothstep(halfWidth - antialias, halfWidth + antialias, distance);
+                return lerp(joint, 2.0 * halfWidth, saturate(footprint - 0.5));
+            }
+
+            void AccumulateLight(Light light, half3 normal, half3 view, half glossPower, half specularStrength,
                 inout half3 diffuse, inout half3 specular)
             {
                 half3 radiance = light.color * light.distanceAttenuation;
                 half incidence = dot(normal, light.direction);
                 diffuse += radiance * saturate((incidence + 0.15h) / 1.15h);
                 half3 halfDirection = SafeNormalize(light.direction + view);
-                half gloss = pow(saturate(dot(normal, halfDirection)), lerp(32.0h, 4.0h, roughness));
-                specular += radiance * gloss * (1.0h - roughness) * saturate(incidence) * 0.15h;
+                half gloss = pow(saturate(dot(normal, halfDirection)), glossPower);
+                specular += radiance * gloss * specularStrength * saturate(incidence);
             }
 
             half4 Frag(Varyings input, FRONT_FACE_TYPE facing : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+                float2 concreteUV = TRANSFORM_TEX(input.uv, _MainTex);
+                // UVs describe a 3 m repeat. Use whole multiples so grout and coping joints close with the loop.
+                float2 tile = input.uv * 60.0;
+                half grout = max(Joint(tile.x, 0.032), Joint(tile.y, 0.032));
+                half copingJoint = Joint(input.uv.x * 6.0, 0.004);
+                bool deck = input.deck > 0.5;
+                bool coping = !deck && input.uv.y < 0.0;
+                bool tileBand = !deck && !coping && tile.y < 3.0;
+                // A shared grout mask controls both the raised glaze and the direct specular response.
+                float2 tileOffset = frac(tile + 0.5) - 0.5;
+                float2 tileDistance = abs(tileOffset);
+                float2 bevel = smoothstep(0.032, 0.058, tileDistance) *
+                    (1.0 - smoothstep(0.058, 0.13, tileDistance));
+                half tileGlaze = 1.0h - grout;
+                half bevelVisibility = saturate(1.0 - 3.0 * max(fwidth(tile.x), fwidth(tile.y)));
                 half3 baseNormal = NormalizeNormalPerPixel(input.normalWS);
                 half3 tangent = SafeNormalize(input.tangentWS.xyz -
                     baseNormal * dot(input.tangentWS.xyz, baseNormal));
                 half3 bitangent = cross(baseNormal, tangent) * input.tangentWS.w;
                 half2 slope = UnpackNormalScale(
-                    SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, input.uv), _BumpScale).xy;
+                    SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, concreteUV), _BumpScale).xy;
+                slope *= coping ? 0.55h : 1.0h;
+                if (tileBand)
+                    slope = -sign(tileOffset) * bevel * (0.52h * tileGlaze * bevelVisibility);
                 // Bring out shallow pits after mip filtering while limiting the steepest slopes to 45 degrees.
                 slope *= rsqrt(1.0h + 2.0h * dot(slope, slope));
                 half perpendicular = sqrt(1.0h - dot(slope, slope));
                 half3 normal = NormalizeNormalPerPixel(
                     tangent * slope.x + bitangent * slope.y + baseNormal * perpendicular) *
                     IS_FRONT_VFACE(facing, 1.0h, -1.0h);
-                half roughness = SAMPLE_TEXTURE2D(_RoughnessMap, sampler_RoughnessMap, input.uv).r;
+                half roughness = SAMPLE_TEXTURE2D(_RoughnessMap, sampler_RoughnessMap, concreteUV).r;
+                half glossPower = tileBand ? 50.0h : lerp(32.0h, 4.0h, roughness);
+                half specularStrength = tileBand ? 0.85h * tileGlaze : 0.15h * (1.0h - roughness);
                 half3 view = GetWorldSpaceNormalizeViewDir(input.positionWS);
                 half3 diffuse = 0.0h;
                 half3 specular = 0.0h;
-                AccumulateLight(GetMainLight(), normal, view, roughness, diffuse, specular);
+                AccumulateLight(GetMainLight(), normal, view, glossPower, specularStrength, diffuse, specular);
                 #if defined(_ADDITIONAL_LIGHTS)
                     uint lightCount = GetAdditionalLightsCount();
                     LIGHT_LOOP_BEGIN(lightCount)
                         AccumulateLight(GetAdditionalLight(lightIndex, input.positionWS),
-                            normal, view, roughness, diffuse, specular);
+                            normal, view, glossPower, specularStrength, diffuse, specular);
                     LIGHT_LOOP_END
                 #endif
 
@@ -124,7 +156,14 @@ Shader "Brush/TransitionSurface"
                 half3 lighting = 0.33h + 0.10h * saturate(SampleSH(normal)) + diffuse * (0.85h / (0.75h + peak));
                 // The app's default mid-grey preserves the concrete's photographed tone.
                 half3 tint = lerp(0.25h, 1.75h, input.color.rgb);
-                half3 color = tint * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv).rgb;
+                half3 concrete = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, concreteUV).rgb;
+                half3 color = tint * concrete;
+                if (tileBand)
+                    color = lerp(half3(0.62h, 0.78h, 0.88h), half3(0.43h, 0.49h, 0.52h), grout);
+                if (coping)
+                    color = lerp(concrete * 0.68h, half3(0.60h, 0.58h, 0.53h), copingJoint * 0.72h);
+                if (deck)
+                    color = tint * (concrete * 0.87h + 0.10h);
                 return half4(MixFog(color * lighting + specular, input.fog), 1.0h);
             }
             ENDHLSL

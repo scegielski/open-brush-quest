@@ -17,6 +17,7 @@ namespace TiltBrush
         private int m_PreviewRadiusInches;
         private int m_PreviewHeightInches;
         private int m_PreviewQuarterTurns;
+        private int m_PreviewDeckDepthInches;
         private CanvasScript m_PreviewCanvas;
         private CanvasScript m_TransitionSampleCanvas;
         private int m_TransitionSampleFrame = -1;
@@ -95,11 +96,13 @@ namespace TiltBrush
             Quaternion? lockedOrientation = brush?.StrokeOrientation ?? TransitionBrush.GetSavedOrientation(editedTransition);
             Quaternion? knotOrientation = null;
             int knotIndex = m_DraggedSplineKnot >= 0 ? m_DraggedSplineKnot :
-                (m_SplineAction == SplineAction.MoveAndRotate ? m_HoveredSplineKnot : -1);
+                (m_SplineAction is SplineAction.MoveAndRotate or SplineAction.DeckDepth ? m_HoveredSplineKnot : -1);
+            int deckDepth = TransitionBrush.DefaultDeckDepthInches;
             if (spline && knotIndex >= 0 && knotIndex < m_SplineKnots.Count)
             {
                 TrTransform knot = m_SplineKnots[knotIndex];
                 coping = knot.translation;
+                deckDepth = Mathf.RoundToInt(KnotDeckDepthInches(knotIndex));
                 if (SplineTracksTransitionHeading)
                     knotOrientation = knot.rotation;
                 else if (SplineUsesHeadingOffsets && m_SavedSplinePreviewBrush is TransitionBrush savedPreview)
@@ -121,29 +124,34 @@ namespace TiltBrush
                     editedTransition.m_BrushSize * editedTransition.m_BrushScale / TransitionBrush.UnitsPerInch));
             int turns = editedTransition != null ? TransitionBrush.QuarterTurnsFromFlags(editedTransition.m_Flags) :
                 brush != null ? brush.QuarterTurns : TransitionBrush.PreferredQuarterTurns;
-            DrawTransitionPreview(roomFromCanvas, coping, heading, camera, inches, turns, parent);
+            float deckScale = editedTransition?.m_BrushScale ??
+                (spline ? 1f : brush?.POINTER_TO_LOCAL ?? canvasFromRoom.scale);
+            DrawTransitionPreview(roomFromCanvas, coping, heading, camera, inches, turns, parent, deckDepth, deckScale);
         }
 
         internal void DrawTransitionPreview(TrTransform roomFromCanvas, Vector3 coping, Vector3 heading,
-            Camera camera, int inches, int quarterTurns, Transform parent = null)
+            Camera camera, int inches, int quarterTurns, Transform parent = null,
+            int deckDepthInches = TransitionBrush.DefaultDeckDepthInches, float deckScale = 1f)
         {
             if (m_TransitionPreviewLine == null)
                 CreateTransitionPreview(parent != null ? parent : transform);
             m_TransitionPreviewLine.gameObject.SetActive(true);
             float radius = inches * TransitionBrush.UnitsPerInch;
+            float deckDepth = deckDepthInches * TransitionBrush.UnitsPerInch * deckScale;
             bool belowFloor = coping.y <= 0f;
             Vector3 tip = roomFromCanvas * coping;
             Transform head = camera.transform;
-            Vector3 labelViewport = camera.WorldToViewportPoint(tip + head.up * 1.1f);
+            Vector3 labelViewport = camera.WorldToViewportPoint(tip + head.up * 1.45f);
             bool labelInView = InPreviewView(labelViewport, camera.nearClipPlane, 0.28f);
             bool profileInView = false;
             if (!belowFloor)
             {
                 Vector3 across = TransitionBrush.Across(heading, quarterTurns);
+                var profile = new TransitionBrush.SurfaceProfile(coping.y, radius, deckDepth);
                 for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
                 {
                     m_TransitionPreviewPoints[row] = roomFromCanvas *
-                        TransitionBrush.ProfileVertex(coping, across, radius, row);
+                        profile.Vertex(coping, across, row, out _);
                     if (!profileInView)
                         profileInView = InPreviewView(camera.WorldToViewportPoint(m_TransitionPreviewPoints[row]),
                             camera.nearClipPlane, 0.06f);
@@ -165,28 +173,33 @@ namespace TiltBrush
             if (!profileInView)
             {
                 float profileHeight = belowFloor ? radius : coping.y;
-                float scale = 1.5f * readoutScale / Mathf.Max(radius, profileHeight);
+                float scale = 1.5f * readoutScale / Mathf.Max(radius + deckDepth, profileHeight);
                 Vector3 right = head.right * (quarterTurns >= 2 ? -1f : 1f);
-                Vector3 origin = labelPosition - head.up * (2.45f * readoutScale) - right * (0.75f * readoutScale);
+                Vector3 origin = labelPosition - head.up * (2.8f * readoutScale);
+                var profile = new TransitionBrush.SurfaceProfile(profileHeight, radius, deckDepth);
+                float center = (profile.Sample(0, out _).x +
+                    profile.Sample(TransitionBrush.ProfilePoints - 1, out _).x) * 0.5f;
                 for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
                 {
-                    Vector2 sample = TransitionBrush.ProfilePoint(profileHeight, radius, row);
-                    m_TransitionPreviewPoints[row] = origin + scale * (sample.x * right + sample.y * head.up);
+                    Vector2 sample = profile.Sample(row, out _);
+                    m_TransitionPreviewPoints[row] = origin + scale * ((sample.x - center) * right + sample.y * head.up);
                 }
             }
             m_TransitionPreviewLine.SetPositions(m_TransitionPreviewPoints);
 
             int heightInches = Mathf.RoundToInt(coping.y / TransitionBrush.UnitsPerInch);
             if (m_PreviewRadiusInches != inches || m_PreviewHeightInches != heightInches ||
-                m_PreviewQuarterTurns != quarterTurns)
+                m_PreviewQuarterTurns != quarterTurns || m_PreviewDeckDepthInches != deckDepthInches)
             {
                 m_PreviewRadiusInches = inches;
                 m_PreviewHeightInches = heightInches;
                 m_PreviewQuarterTurns = quarterTurns;
+                m_PreviewDeckDepthInches = deckDepthInches;
                 m_TransitionReadout.text =
                     $"Radius {TransitionBrush.FormatFeetAndInches(inches)}\n" +
                     $"Height {TransitionBrush.FormatFeetAndInches(heightInches)}\n" +
-                    $"Orientation {quarterTurns * 90}°";
+                    $"Orientation {quarterTurns * 90}°\n" +
+                    $"Deck Depth {TransitionBrush.FormatFeetAndInches(deckDepthInches)}";
             }
             Transform label = m_TransitionReadout.transform;
             label.SetPositionAndRotation(labelPosition, Quaternion.LookRotation(labelPosition - head.position, head.up));
@@ -234,6 +247,7 @@ namespace TiltBrush
             m_TransitionPreviewLine.sharedMaterial = m_TransitionPreviewMaterial;
             m_TransitionPreviewLine.shadowCastingMode = ShadowCastingMode.Off;
             m_TransitionPreviewLine.receiveShadows = false;
+            m_TransitionPreviewLine.allowOcclusionWhenDynamic = false;
 
             var label = new GameObject("Transition measurements");
             label.layer = root.layer;
@@ -243,12 +257,22 @@ namespace TiltBrush
             m_TransitionReadout.color = Color.white;
             m_TransitionReadout.fontSize = 3.6f;
             m_TransitionReadout.textWrappingMode = TextWrappingModes.NoWrap;
-            m_TransitionLabelMaterial = new Material(m_TransitionReadout.fontSharedMaterial);
-            m_TransitionLabelMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.black);
-            m_TransitionLabelMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.12f);
-            m_TransitionReadout.fontSharedMaterial = m_TransitionLabelMaterial;
-            m_TransitionReadout.renderer.shadowCastingMode = ShadowCastingMode.Off;
-            m_TransitionReadout.renderer.receiveShadows = false;
+            m_TransitionLabelMaterial = CreateTransitionOverlayTextMaterial(m_TransitionReadout);
+        }
+
+        private static Material CreateTransitionOverlayTextMaterial(TextMeshPro label)
+        {
+            var reference = Resources.Load<Material>("Brushes/Basic/Transition/TransitionOverlayText");
+            // Keep the configured font atlas while switching its renderer to the always-visible shader.
+            var material = new Material(label.fontSharedMaterial) { shader = reference.shader };
+            material.renderQueue = (int)RenderQueue.Overlay + 1;
+            material.SetColor(ShaderUtilities.ID_OutlineColor, Color.black);
+            material.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.12f);
+            label.fontSharedMaterial = material;
+            label.renderer.shadowCastingMode = ShadowCastingMode.Off;
+            label.renderer.receiveShadows = false;
+            label.renderer.allowOcclusionWhenDynamic = false;
+            return material;
         }
     }
 }

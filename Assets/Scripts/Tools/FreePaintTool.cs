@@ -42,7 +42,6 @@ namespace TiltBrush
         private bool m_brushUndoButtonTapInvalid { get; set; }
         private float m_brushUndoButtonTapExpiry { get; set; }
         private const float TapDelayTime = 0.333f;
-        public bool m_brushUndoButtonHeld { get; private set; }
 
         public float m_brushTriggerRatio { get; private set; }
         public float m_wandTriggerRatio { get; private set; }
@@ -108,9 +107,6 @@ namespace TiltBrush
                 if (m_brushTriggerDown || m_brushUndoButtonTapExpiry <= 0)
                     m_brushUndoButtonTapInvalid = true;
             }
-
-            m_brushUndoButtonHeld = m_brushUndoButtonTapInvalid && m_brushUndoButton;
-
 
             if (m_EatInput && !m_brushTrigger)
                 m_EatInput = false;

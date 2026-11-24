@@ -42,6 +42,18 @@ namespace TiltBrush
         internal static int GetSampleCount(int knotCount, bool closed) =>
             1 + (closed ? knotCount : knotCount - 1) * SamplesPerSegment;
 
+        // The deck profile passes through every depth setting at a fixed sample index, so the
+        // settings can be recovered from the baked stroke even though its B-spline misses the hull.
+        internal static float SampleDeckScale(IReadOnlyList<TrTransform> knots, int sample, bool closed)
+        {
+            int index = sample / SamplesPerSegment;
+            if (!closed && index >= knots.Count - 1)
+                return knots[knots.Count - 1].scale;
+            index %= knots.Count;
+            float t = (sample % SamplesPerSegment) / (float)SamplesPerSegment;
+            return Mathf.SmoothStep(knots[index].scale, knots[(index + 1) % knots.Count].scale, t);
+        }
+
         // Map an edited sample back to the old stroke for pressure, timestamps and point colors.
         internal static int GetSourceSampleIndex(int index, int oldCount, int newCount, int changed,
             float insertT, bool oldClosed = false)

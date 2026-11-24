@@ -18,8 +18,16 @@ namespace TiltBrush
         private const string kOrientationPreference = "TransitionQuarterTurns";
         internal const float UnitsPerInch = 0.0254f * App.METERS_TO_UNITS;
         private const float kConcreteRepeat = 3f * App.METERS_TO_UNITS;
-        internal const int ArcSegments = 24;
-        internal const int ProfilePoints = ArcSegments + 2;
+        private const int kNoseSegments = 8;
+        private const int kArcSegments = 24;
+        private const float kCopingWidth = 10f * UnitsPerInch;
+        private const float kNoseRadius = 0.75f * UnitsPerInch;
+        internal const int DefaultDeckDepthInches = 36;
+        internal const int MaxDeckDepthInches = 240;
+        private const int kCopingStart = 2;
+        internal const int TopOfCoping = kCopingStart + 1;
+        internal const int WallStart = TopOfCoping + kNoseSegments;
+        internal const int ProfilePoints = WallStart + kArcSegments + 2;
         private const int kMaxStations = 65000 / ProfilePoints;
         private const float kMinPositionDelta = 0.0001f;
 
@@ -27,6 +35,7 @@ namespace TiltBrush
         private bool m_ClosedSweep;
         internal int NewStrokeQuarterTurns { get; set; }
         internal bool TrackControllerForNewStroke { get; set; }
+        internal float? PreviewStartDeckPressure { get; set; }
         internal Quaternion CurrentControllerOrientation { get; set; }
         internal int QuarterTurns => m_StrokeData == null ? NewStrokeQuarterTurns :
             QuarterTurnsFromFlags(m_StrokeData.m_Flags);
@@ -38,6 +47,11 @@ namespace TiltBrush
             (stroke.m_Flags & StrokeFlags.TransitionControllerHeading) != 0;
         internal static bool HasHeadingOffsets(StrokeData stroke) =>
             (stroke.m_Flags & StrokeFlags.TransitionHeadingOffsets) != 0;
+        internal static bool HasVariableDeck(StrokeData stroke) =>
+            (stroke.m_Flags & StrokeFlags.TransitionVariableDeck) != 0;
+
+        internal static float DecodeDeckDepth(float pressure) =>
+            float.IsFinite(pressure) ? Mathf.Clamp01(pressure) * MaxDeckDepthInches : DefaultDeckDepthInches;
 
         internal static Quaternion? GetSavedOrientation(StrokeData stroke)
         {
@@ -100,7 +114,9 @@ namespace TiltBrush
                 bUseNormals = true,
                 bUseTangents = true,
                 uv0Size = 2,
-                uv0Semantic = GeometryPool.Semantic.XyIsUv
+                uv0Semantic = GeometryPool.Semantic.XyIsUv,
+                uv1Size = 3,
+                uv1Semantic = GeometryPool.Semantic.XyIsUv
             };
         }
 
@@ -114,30 +130,68 @@ namespace TiltBrush
         public override bool IsOutOfVerts() => false; // Station sampling caps the mesh before allocation.
         public override bool ShouldCurrentLineEnd() => false;
 
-        // The cross section starts at the coping and runs inward to a tangent on sketch Y=0.
-        // When the coping is above the full quarter circle, row 0 adds the vertical extension.
-        internal static Vector2 ProfilePoint(float copingHeight, float radius, int row)
+        // Sample the coping from the deck side to the bowl, then follow the original transition to Y=0.
+        // The rounded lip covers the upper part of the wall without changing the radius or floor run.
+        internal readonly struct SurfaceProfile
         {
-            float height = Mathf.Max(0, copingHeight);
-            if (row == 0)
-                return new Vector2(0, height);
+            private readonly float m_Height, m_Radius, m_Nose, m_Width, m_JoinHeight, m_JoinRun;
+            private readonly float m_WallAngle, m_ArcRun, m_FloorRun, m_StraightLength;
+            private readonly float m_DeckDepth;
 
-            float arcHeight = Mathf.Min(height, radius);
-            float angle = Mathf.Acos(Mathf.Clamp01(1 - arcHeight / radius));
-            if (row == 1)
-                return new Vector2(0, arcHeight);
-            if (row == ProfilePoints - 1)
-                return new Vector2(radius * Mathf.Sin(angle), 0);
+            internal SurfaceProfile(float height, float radius, float deckDepth = DefaultDeckDepthInches * UnitsPerInch)
+            {
+                m_Height = Mathf.Max(0f, height);
+                m_Radius = radius;
+                m_Nose = Mathf.Min(kNoseRadius, m_Height * 0.2f);
+                m_Width = Mathf.Min(kCopingWidth, m_Height * 4f);
+                m_DeckDepth = m_Height > 0f ? deckDepth : 0f;
+                m_JoinHeight = m_Height - 2f * m_Nose;
+                m_FloorRun = radius * Mathf.Sin(ArcAngle(m_Height, radius));
+                m_WallAngle = ArcAngle(m_JoinHeight, radius);
+                m_ArcRun = radius * Mathf.Sin(m_WallAngle);
+                m_JoinRun = m_FloorRun - m_ArcRun;
+                m_StraightLength = Mathf.Max(0f, m_JoinHeight - radius);
+            }
 
-            float sampleAngle = angle * (1 - (row - 1f) / ArcSegments);
-            return new Vector2(radius * (Mathf.Sin(angle) - Mathf.Sin(sampleAngle)),
-                radius * (1 - Mathf.Cos(sampleAngle)));
-        }
+            private static float ArcAngle(float height, float radius) =>
+                Mathf.Acos(Mathf.Clamp01(1f - height / radius));
 
-        internal static Vector3 ProfileVertex(Vector3 coping, Vector3 across, float radius, int row)
-        {
-            Vector2 profile = ProfilePoint(coping.y, radius, row);
-            return new Vector3(coping.x, profile.y, coping.z) + across * profile.x;
+            internal Vector2 Sample(int row, out float distance)
+            {
+                if (row < TopOfCoping)
+                {
+                    distance = -m_Width - m_Nose * Mathf.PI;
+                    if (row == 0)
+                        distance -= m_DeckDepth;
+                    return new Vector2(-m_Width - (row == 0 ? m_DeckDepth : 0f), m_Height);
+                }
+                if (row < WallStart)
+                {
+                    float fraction = (row - TopOfCoping) / (float)kNoseSegments;
+                    float angle = fraction * Mathf.PI;
+                    distance = -m_Nose * (Mathf.PI - angle);
+                    return new Vector2(m_Nose * Mathf.Sin(angle) + m_JoinRun * fraction,
+                        m_Height - m_Nose * (1f - Mathf.Cos(angle)));
+                }
+                if (row == WallStart)
+                {
+                    distance = 0f;
+                    return new Vector2(m_JoinRun, m_JoinHeight);
+                }
+                float arcFraction = (row - WallStart - 1f) / kArcSegments;
+                float sampleAngle = m_WallAngle * (1f - arcFraction);
+                distance = m_StraightLength + m_Radius * m_WallAngle * arcFraction;
+                if (row == WallStart + 1)
+                    return new Vector2(m_JoinRun, Mathf.Min(m_JoinHeight, m_Radius));
+                return new Vector2(m_FloorRun - m_Radius * Mathf.Sin(sampleAngle),
+                    m_Radius * (1f - Mathf.Cos(sampleAngle)));
+            }
+
+            internal Vector3 Vertex(Vector3 coping, Vector3 across, int row, out float distance)
+            {
+                Vector2 point = Sample(row, out distance);
+                return new Vector3(coping.x, point.y, coping.z) + across * point.x;
+            }
         }
 
         internal static Vector3 Across(Vector3 heading, int turns)
@@ -174,6 +228,7 @@ namespace TiltBrush
             int turns = QuarterTurns;
             Quaternion? orientation = StrokeOrientation;
             bool tracksController = TracksController;
+            bool variableDeck = PreviewStartDeckPressure.HasValue || (m_StrokeData != null && HasVariableDeck(m_StrokeData));
             bool hasOffsets = m_StrokeData != null && HasHeadingOffsets(m_StrokeData);
             Vector3? fixedHeading = orientation.HasValue ? HorizontalHeading(orientation.Value) : null;
             bool reverseWinding = turns >= 2;
@@ -184,16 +239,8 @@ namespace TiltBrush
             m_ClosedSweep = closed;
             var vertices = m_geometry.m_Vertices;
             float totalDistance = 0f;
-            for (int station = 0; station < count; station++)
-            {
-                Vector3 coping = m_Stations[station].point.m_Pos;
-                if (station > 0)
-                    totalDistance += Vector3.Distance(coping, m_Stations[station - 1].point.m_Pos);
-                Vector3 heading = GetStationHeading(station, tracksController, hasOffsets, fixedHeading);
-                Vector3 across = Across(heading, turns);
-                for (int row = 0; row < ProfilePoints; row++)
-                    vertices[station * ProfilePoints + row] = ProfileVertex(coping, across, radius, row);
-            }
+            for (int station = 1; station < count; station++)
+                totalDistance += Vector3.Distance(m_Stations[station].point.m_Pos, m_Stations[station - 1].point.m_Pos);
 
             // Double the previous whole-tile count on loops so the seam stays aligned.
             float repeatsPerUnit = closed
@@ -205,19 +252,48 @@ namespace TiltBrush
                 Vector3 coping = m_Stations[station].point.m_Pos;
                 if (station > 0)
                     distance += Vector3.Distance(coping, m_Stations[station - 1].point.m_Pos);
-                float straightLength = Mathf.Max(0f, coping.y - radius);
-                float arcStep = radius * Mathf.Acos(Mathf.Clamp01(1 - Mathf.Max(0f, coping.y) / radius)) / ArcSegments;
+                Vector3 heading = GetStationHeading(station, tracksController, hasOffsets, fixedHeading);
+                Vector3 across = Across(heading, turns);
+                float depthInches = DefaultDeckDepthInches;
+                if (variableDeck)
+                {
+                    // GeometryBrush takes the first moving sample's pressure for the initial knot.
+                    float pressure = station == 0
+                        ? PreviewStartDeckPressure ?? m_StrokeData.m_ControlPoints[0].m_Pressure
+                        : m_Stations[station].point.m_Pressure;
+                    depthInches = DecodeDeckDepth(pressure);
+                }
+                var profile = new SurfaceProfile(coping.y, radius, depthInches * UnitsPerInch * POINTER_TO_LOCAL);
+                int first = station * ProfilePoints;
+                for (int row = 0; row < ProfilePoints; row++)
+                {
+                    vertices[first + row] = profile.Vertex(coping, across, row, out float profileDistance);
+                    SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / kConcreteRepeat));
+                    SetUv1(first, row, row < kCopingStart ? Vector3.right : Vector3.zero);
+                }
+            }
+
+            for (int station = 0; station < count; station++)
+            {
                 int first = station * ProfilePoints;
                 int previous = station > 0 ? station - 1 : (closed ? count - 2 : 0);
                 int next = station < count - 1 ? station + 1 : (closed ? 1 : station);
+                bool collapsedJoin = vertices[first + WallStart] == vertices[first + WallStart + 1];
                 for (int row = 0; row < ProfilePoints; row++)
                 {
                     Vector3 along = vertices[next * ProfilePoints + row] - vertices[previous * ProfilePoints + row];
                     int upper = Mathf.Max(0, row - 1);
                     int lower = Mathf.Min(ProfilePoints - 1, row + 1);
-                    // The extra top row coincides with the arc when there is no vertical face.
-                    if (row == 0 && vertices[first] == vertices[first + 1])
-                        lower = 2;
+                    // The deck and coping share an edge with separate material coordinates.
+                    if (row == kCopingStart - 1)
+                        lower++;
+                    if (row == kCopingStart)
+                        upper--;
+                    // The join and first arc vertex coincide when there is no vertical face.
+                    if (collapsedJoin && row == WallStart)
+                        lower++;
+                    if (collapsedJoin && row == WallStart + 1)
+                        upper--;
                     Vector3 down = vertices[first + lower] - vertices[first + upper];
                     Vector3 normal = (reverseWinding ? Vector3.Cross(down, along) : Vector3.Cross(along, down)).normalized;
                     if (normal == Vector3.zero)
@@ -228,18 +304,16 @@ namespace TiltBrush
                         tangent = Vector3.Cross(normal, Mathf.Abs(normal.z) < 0.9f ? Vector3.forward : Vector3.right);
                     float tangentSign = Vector3.Dot(Vector3.Cross(normal, tangent), down) < 0f ? -1f : 1f;
                     SetTangent(first, row, tangent, tangentSign);
-                    float profileDistance = row == 0 ? 0f : straightLength + (row - 1) * arcStep;
-                    SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / kConcreteRepeat));
-                    if (station == count - 1 || row == ProfilePoints - 1)
+                    if (station == count - 1 || row == ProfilePoints - 1 || row == kCopingStart - 1)
                         continue;
                     // The last ring has the same positions as the first ring of a loop, with its own UVs.
                     int nextFirst = first + ProfilePoints;
                     int top = first + row;
                     int nextTop = nextFirst + row;
                     // Weld each collapsed top row to its arc.
-                    if (row == 0 && vertices[top] == vertices[top + 1])
+                    if (row == WallStart && collapsedJoin)
                         top++;
-                    if (row == 0 && vertices[nextTop] == vertices[nextTop + 1])
+                    if (row == WallStart && vertices[nextTop] == vertices[nextTop + 1])
                         nextTop++;
                     AddTriangle(top, nextTop, first + row + 1, reverseWinding);
                     AddTriangle(first + row + 1, nextTop, nextFirst + row + 1, reverseWinding);
