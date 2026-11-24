@@ -39,9 +39,10 @@ namespace TiltBrush
         [Test]
         public void RadiusDisplaysWholeInchesAcrossFootBoundaries()
         {
-            Assert.That(TransitionBrush.FormatRadius(71), Is.EqualTo("5 ft 11 in"));
-            Assert.That(TransitionBrush.FormatRadius(72), Is.EqualTo("6 ft 0 in"));
-            Assert.That(TransitionBrush.FormatRadius(73), Is.EqualTo("6 ft 1 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(71), Is.EqualTo("5 ft 11 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(72), Is.EqualTo("6 ft 0 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(73), Is.EqualTo("6 ft 1 in"));
+            Assert.That(TransitionBrush.FormatFeetAndInches(-14), Is.EqualTo("-1 ft 2 in"));
         }
 
         [Test]
@@ -60,9 +61,11 @@ namespace TiltBrush
                 Is.LessThan(1e-5f));
         }
 
-        [TestCase(false)]
-        [TestCase(true)]
-        public void PreviewAndRadiusRenderAgainstATransparentBackground(bool tipBehindViewer)
+        [TestCase(false, 0)]
+        [TestCase(false, 1)]
+        [TestCase(true, 2)]
+        [TestCase(true, 3)]
+        public void PreviewAndMeasurementsRenderAgainstATransparentBackground(bool tipBehindViewer, int turns)
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
                 Assert.Ignore("Preview rendering requires a graphics device.");
@@ -94,12 +97,11 @@ namespace TiltBrush
                 camera.cullingMask = 1 << previewLayer;
                 camera.transform.position = new Vector3(3f, 4f, -9f);
 
-                var coping = new Vector3(0f, 8f, tipBehindViewer ? -15f : 0f);
-                int turns = tipBehindViewer ? 3 : 0;
+                var coping = new Vector3(0f, 30f * TransitionBrush.UnitsPerInch, tipBehindViewer ? -15f : 0f);
                 tool.DrawTransitionPreview(TrTransform.identity, coping,
                     Vector3.forward, camera, 72, turns);
                 var label = tool.GetComponentInChildren<TMPro.TextMeshPro>();
-                Assert.That(label.text, Is.EqualTo($"6 ft 0 in  {turns * 90}°"));
+                Assert.That(label.text, Is.EqualTo($"Radius 6 ft 0 in\nHeight 2 ft 6 in\nOrientation {turns * 90}°"));
                 label.ForceMeshUpdate();
                 RenderPipeline.SubmitRenderRequest(camera,
                     new UniversalRenderPipeline.SingleCameraRequest { destination = target });
@@ -109,7 +111,11 @@ namespace TiltBrush
                 Assert.That(pixels.Count(p => p.a > 128 && p.b > 140 && p.g > 140 && p.r < 150), Is.GreaterThan(30),
                     "The arc must write visible cyan pixels with alpha.");
                 Assert.That(pixels.Count(p => p.a > 128 && p.r > 200 && p.g > 200 && p.b > 200), Is.GreaterThan(30),
-                    "The radius must write visible white pixels with alpha.");
+                    "The measurement readout must write visible white pixels with alpha.");
+
+                coping.y = -2f * TransitionBrush.UnitsPerInch;
+                tool.DrawTransitionPreview(TrTransform.identity, coping, Vector3.forward, camera, 72, turns);
+                Assert.That(label.text, Is.EqualTo($"Radius 6 ft 0 in\nHeight -0 ft 2 in\nOrientation {turns * 90}°"));
             }
             finally
             {
@@ -132,14 +138,21 @@ namespace TiltBrush
         }
 
         [Test]
-        public void CheckerDarkensAlternatingSquaresWithoutChangingTheBrushHue()
+        public void ConcreteMaterialRendersTintedDetailAndRepeatsAtTileBoundaries()
         {
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
-                Assert.Ignore("Checker rendering requires a graphics device.");
+                Assert.Ignore("Concrete rendering requires a graphics device.");
 
             var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(kBrush);
+            Assert.That(descriptor.Material.mainTexture.name, Is.EqualTo("Concrete019Diffuse"));
+            var normalMap = descriptor.Material.GetTexture("_BumpMap");
+            var normalImporter = (TextureImporter)AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(normalMap));
+            Assert.That(normalImporter.textureType, Is.EqualTo(TextureImporterType.NormalMap));
+            Assert.That(normalImporter.flipGreenChannel, Is.True);
+            Assert.That(normalImporter.GetPlatformTextureSettings("Android").maxTextureSize, Is.EqualTo(2048));
+            Assert.That(descriptor.Material.GetTexture("_RoughnessMap").name, Is.EqualTo("Concrete019Specular"));
             var tile = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            var cameraObject = new GameObject("Checker test camera");
+            var cameraObject = new GameObject("Concrete test camera");
             var target = RenderTexture.GetTemporary(128, 128, 24, RenderTextureFormat.ARGB32);
             var image = new Texture2D(128, 128, TextureFormat.RGBA32, false);
             var previousTarget = RenderTexture.active;
@@ -149,7 +162,7 @@ namespace TiltBrush
                 tile.layer = 30;
                 tile.GetComponent<MeshFilter>().sharedMesh = mesh;
                 tile.GetComponent<MeshRenderer>().sharedMaterial = descriptor.Material;
-                mesh.colors32 = Enumerable.Repeat(new Color32(210, 110, 45, 255), mesh.vertexCount).ToArray();
+                mesh.colors32 = Enumerable.Repeat(new Color32(156, 114, 76, 255), mesh.vertexCount).ToArray();
 
                 var camera = cameraObject.AddComponent<Camera>();
                 camera.enabled = false;
@@ -164,17 +177,19 @@ namespace TiltBrush
                     new UniversalRenderPipeline.SingleCameraRequest { destination = target });
                 RenderTexture.active = target;
                 image.ReadPixels(new Rect(0, 0, 128, 128), 0, 0);
-                var a = image.GetPixel(32, 32);
-                var b = image.GetPixel(96, 32);
-                var c = image.GetPixel(32, 96);
-                var d = image.GetPixel(96, 96);
-                Assert.That(a.a, Is.GreaterThan(0.95f));
-                Assert.That(a.r, Is.GreaterThan(a.g));
-                Assert.That(a.g, Is.GreaterThan(a.b));
-                Assert.That(a.r, Is.EqualTo(d.r).Within(0.015f));
-                Assert.That(b.r, Is.EqualTo(c.r).Within(0.015f));
-                Assert.That(Mathf.Abs(a.r - b.r), Is.GreaterThan(0.03f));
-                Assert.That(a.r / a.g, Is.EqualTo(b.r / b.g).Within(0.08f));
+                var sample = image.GetPixel(32, 32);
+                Assert.That(sample.a, Is.GreaterThan(0.95f));
+                Assert.That(sample.r, Is.GreaterThan(sample.g));
+                Assert.That(sample.g, Is.GreaterThan(sample.b));
+                var patch = image.GetPixels(16, 16, 96, 96);
+                Assert.That(patch.Max(pixel => pixel.g) - patch.Min(pixel => pixel.g), Is.GreaterThan(0.03f));
+
+                mesh.uv = mesh.uv.Select(uv => uv + Vector2.right).ToArray();
+                RenderPipeline.SubmitRenderRequest(camera,
+                    new UniversalRenderPipeline.SingleCameraRequest { destination = target });
+                RenderTexture.active = target;
+                image.ReadPixels(new Rect(0, 0, 128, 128), 0, 0);
+                Assert.That(image.GetPixel(32, 32).g, Is.EqualTo(sample.g).Within(0.015f));
             }
             finally
             {
@@ -184,6 +199,97 @@ namespace TiltBrush
                 Object.DestroyImmediate(tile);
                 Object.DestroyImmediate(mesh);
                 Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void ConcreteNormalMapChangesShadingUnderTheFillLightWithFlatAlbedo()
+        {
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("Concrete rendering requires a graphics device.");
+
+            const int layer = 30;
+            const int resolution = 512;
+            const int border = 32;
+            const int patchSize = resolution - 2 * border;
+            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(kBrush);
+            var material = new Material(descriptor.Material);
+            var tile = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            var filter = tile.GetComponent<MeshFilter>();
+            var mesh = Object.Instantiate(filter.sharedMesh);
+            var cameraObject = new GameObject("Concrete normal test camera");
+            var key = new GameObject("Light behind concrete", typeof(Light)).GetComponent<Light>();
+            var fill = new GameObject("Concrete grazing fill", typeof(Light)).GetComponent<Light>();
+            var previousSun = RenderSettings.sun;
+            var previousTarget = RenderTexture.active;
+            var target = RenderTexture.GetTemporary(resolution, resolution, 24, RenderTextureFormat.ARGB32);
+            var image = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false);
+
+            try
+            {
+                tile.layer = key.gameObject.layer = fill.gameObject.layer = layer;
+                filter.sharedMesh = mesh;
+                mesh.colors32 = Enumerable.Repeat(new Color32(128, 128, 128, 255), mesh.vertexCount).ToArray();
+                tile.GetComponent<MeshRenderer>().sharedMaterial = material;
+                material.mainTexture = Texture2D.whiteTexture;
+                material.SetTexture("_RoughnessMap", Texture2D.whiteTexture);
+
+                key.type = fill.type = LightType.Directional;
+                key.cullingMask = fill.cullingMask = 1 << layer;
+                key.transform.rotation = Quaternion.LookRotation(Vector3.back);
+                key.intensity = 1.6f;
+                fill.transform.rotation = Quaternion.LookRotation(new Vector3(-1f, -0.35f, 0.35f));
+                fill.intensity = 0.6f;
+                RenderSettings.sun = key;
+
+                var camera = cameraObject.AddComponent<Camera>();
+                camera.enabled = false;
+                camera.orthographic = true;
+                camera.orthographicSize = 0.55f;
+                camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = Color.clear;
+                camera.cullingMask = 1 << layer;
+                camera.transform.position = Vector3.back * 3f;
+                var request = new UniversalRenderPipeline.SingleCameraRequest { destination = target };
+                var frame = new Rect(0f, 0f, resolution, resolution);
+
+                RenderPipeline.SubmitRenderRequest(camera, request);
+                RenderTexture.active = target;
+                image.ReadPixels(frame, 0, 0);
+                Color[] withNormalMap = image.GetPixels(border, border, patchSize, patchSize);
+                material.SetFloat("_BumpScale", 0f);
+                RenderPipeline.SubmitRenderRequest(camera, request);
+                RenderTexture.active = target;
+                image.ReadPixels(frame, 0, 0);
+                Color[] flat = image.GetPixels(border, border, patchSize, patchSize);
+                fill.enabled = false;
+                RenderPipeline.SubmitRenderRequest(camera, request);
+                RenderTexture.active = target;
+                image.ReadPixels(frame, 0, 0);
+                Color[] withoutFill = image.GetPixels(border, border, patchSize, patchSize);
+
+                Assert.That(flat.Min(pixel => pixel.a), Is.GreaterThan(0.99f));
+                Assert.That(flat.Max(pixel => pixel.g) - flat.Min(pixel => pixel.g), Is.LessThan(0.005f));
+                Assert.That(flat.Average(pixel => pixel.g) - withoutFill.Average(pixel => pixel.g),
+                    Is.GreaterThan(0.06f), "The fill light must illuminate the concrete from a grazing angle.");
+                var normalContrast = withNormalMap.Zip(flat, (lit, plain) => Mathf.Abs(lit.g - plain.g)).ToArray();
+                Assert.That(normalContrast.Average(), Is.GreaterThan(0.008f));
+                Assert.That(normalContrast.Count(change => change > 0.025f),
+                    Is.GreaterThan(normalContrast.Length / 40),
+                    "The normal map alone must create visible shading under a grazing fill light.");
+            }
+            finally
+            {
+                RenderSettings.sun = previousSun;
+                RenderTexture.active = previousTarget;
+                RenderTexture.ReleaseTemporary(target);
+                Object.DestroyImmediate(image);
+                Object.DestroyImmediate(key.gameObject);
+                Object.DestroyImmediate(fill.gameObject);
+                Object.DestroyImmediate(cameraObject);
+                Object.DestroyImmediate(tile);
+                Object.DestroyImmediate(mesh);
+                Object.DestroyImmediate(material);
             }
         }
 
@@ -278,10 +384,15 @@ namespace TiltBrush
                     Assert.That(Vector3.Distance(vertices[TransitionBrush.ProfilePoints - 1],
                         new Vector3(6f, 0f, 0f)), Is.LessThan(1e-5f));
                 Vector2[] uv = mesh.uv;
+                const float tileSize = 3f * App.METERS_TO_UNITS;
                 Assert.That(uv[TransitionBrush.ProfilePoints].x,
-                    Is.EqualTo(10f / TransitionBrush.CheckerRepeat).Within(1e-5f));
+                    Is.EqualTo(10f / tileSize).Within(1e-5f));
                 Assert.That(uv[TransitionBrush.ProfilePoints - 1].y,
-                    Is.EqualTo((2f + 3f * Mathf.PI) / TransitionBrush.CheckerRepeat).Within(1e-5f));
+                    Is.EqualTo((2f + 3f * Mathf.PI) / tileSize).Within(1e-5f));
+                Vector4 tangent = mesh.tangents[0];
+                var tangentDirection = new Vector3(tangent.x, tangent.y, tangent.z);
+                Assert.That(tangentDirection.magnitude, Is.EqualTo(1f).Within(1e-5f));
+                Assert.That(Vector3.Dot(tangentDirection, mesh.normals[0]), Is.Zero.Within(1e-5f));
                 for (int row = 0; row < TransitionBrush.ProfilePoints; row++)
                 {
                     Vector3 preview = TransitionBrush.ProfileVertex(new Vector3(0f, 8f, 10f), across, 6f, row);

@@ -5,7 +5,10 @@ Shader "Brush/TransitionSurface"
 {
     Properties
     {
-        _MainTex ("Checkerboard", 2D) = "white" {}
+        _MainTex ("Concrete diffuse", 2D) = "white" {}
+        [Normal] _BumpMap ("Concrete normal", 2D) = "bump" {}
+        _BumpScale ("Concrete normal strength", Range(0, 16)) = 12
+        _RoughnessMap ("Concrete roughness", 2D) = "white" {}
     }
 
     SubShader
@@ -22,20 +25,27 @@ Shader "Brush/TransitionSurface"
             #pragma fragment Frag
             #pragma multi_compile_instancing
             #pragma multi_compile_fog
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
             TEXTURE2D(_MainTex);
             SAMPLER(sampler_MainTex);
+            TEXTURE2D(_BumpMap);
+            SAMPLER(sampler_BumpMap);
+            TEXTURE2D(_RoughnessMap);
+            SAMPLER(sampler_RoughnessMap);
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
+                half _BumpScale;
             CBUFFER_END
 
             struct Attributes
             {
                 float4 positionOS : POSITION;
                 half3 normalOS : NORMAL;
+                half4 tangentOS : TANGENT;
                 half4 color : COLOR;
                 float2 uv : TEXCOORD0;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -47,6 +57,8 @@ Shader "Brush/TransitionSurface"
                 float2 uv : TEXCOORD0;
                 half3 normalWS : TEXCOORD1;
                 half fog : TEXCOORD2;
+                half4 tangentWS : TEXCOORD3;
+                float3 positionWS : TEXCOORD4;
                 half4 color : COLOR;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -56,22 +68,64 @@ Shader "Brush/TransitionSurface"
                 Varyings output;
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                VertexPositionInputs position = GetVertexPositionInputs(input.positionOS.xyz);
+                output.positionCS = position.positionCS;
+                output.positionWS = position.positionWS;
                 output.normalWS = TransformObjectToWorldNormal(input.normalOS);
+                output.tangentWS = half4(TransformObjectToWorldDir(input.tangentOS.xyz),
+                    input.tangentOS.w * GetOddNegativeScale());
                 output.fog = ComputeFogFactor(output.positionCS.z);
                 output.color = input.color;
                 output.uv = TRANSFORM_TEX(input.uv, _MainTex);
                 return output;
             }
 
+            void AccumulateLight(Light light, half3 normal, half3 view, half roughness,
+                inout half3 diffuse, inout half3 specular)
+            {
+                half3 radiance = light.color * light.distanceAttenuation;
+                half incidence = dot(normal, light.direction);
+                diffuse += radiance * saturate((incidence + 0.15h) / 1.15h);
+                half3 halfDirection = SafeNormalize(light.direction + view);
+                half gloss = pow(saturate(dot(normal, halfDirection)), lerp(32.0h, 4.0h, roughness));
+                specular += radiance * gloss * (1.0h - roughness) * saturate(incidence) * 0.15h;
+            }
+
             half4 Frag(Varyings input, FRONT_FACE_TYPE facing : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
-                half3 normal = NormalizeNormalPerPixel(input.normalWS) * IS_FRONT_VFACE(facing, 1.0h, -1.0h);
-                Light light = GetMainLight();
-                half3 lighting = max(SampleSH(normal) + light.color * saturate(dot(normal, light.direction)), 0.55h);
-                half3 color = input.color.rgb * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv).rgb;
-                return half4(MixFog(color * lighting, input.fog), 1.0h);
+                half3 baseNormal = NormalizeNormalPerPixel(input.normalWS);
+                half3 tangent = SafeNormalize(input.tangentWS.xyz -
+                    baseNormal * dot(input.tangentWS.xyz, baseNormal));
+                half3 bitangent = cross(baseNormal, tangent) * input.tangentWS.w;
+                half2 slope = UnpackNormalScale(
+                    SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, input.uv), _BumpScale).xy;
+                // Bring out shallow pits after mip filtering while limiting the steepest slopes to 45 degrees.
+                slope *= rsqrt(1.0h + 2.0h * dot(slope, slope));
+                half perpendicular = sqrt(1.0h - dot(slope, slope));
+                half3 normal = NormalizeNormalPerPixel(
+                    tangent * slope.x + bitangent * slope.y + baseNormal * perpendicular) *
+                    IS_FRONT_VFACE(facing, 1.0h, -1.0h);
+                half roughness = SAMPLE_TEXTURE2D(_RoughnessMap, sampler_RoughnessMap, input.uv).r;
+                half3 view = GetWorldSpaceNormalizeViewDir(input.positionWS);
+                half3 diffuse = 0.0h;
+                half3 specular = 0.0h;
+                AccumulateLight(GetMainLight(), normal, view, roughness, diffuse, specular);
+                #if defined(_ADDITIONAL_LIGHTS)
+                    uint lightCount = GetAdditionalLightsCount();
+                    LIGHT_LOOP_BEGIN(lightCount)
+                        AccumulateLight(GetAdditionalLight(lightIndex, input.positionWS),
+                            normal, view, roughness, diffuse, specular);
+                    LIGHT_LOOP_END
+                #endif
+
+                // Compress bright direct light smoothly to preserve contrast in the normal map.
+                half peak = Max3(diffuse.r, diffuse.g, diffuse.b);
+                half3 lighting = 0.33h + 0.10h * saturate(SampleSH(normal)) + diffuse * (0.85h / (0.75h + peak));
+                // The app's default mid-grey preserves the concrete's photographed tone.
+                half3 tint = lerp(0.25h, 1.75h, input.color.rgb);
+                half3 color = tint * SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv).rgb;
+                return half4(MixFog(color * lighting + specular, input.fog), 1.0h);
             }
             ENDHLSL
         }

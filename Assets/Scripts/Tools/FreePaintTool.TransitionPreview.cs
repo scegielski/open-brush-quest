@@ -12,10 +12,10 @@ namespace TiltBrush
         private readonly Vector3[] m_TransitionPreviewPoints = new Vector3[TransitionBrush.ProfilePoints];
         private LineRenderer m_TransitionPreviewLine;
         private Material m_TransitionPreviewMaterial;
-        private TextMeshPro m_TransitionRadiusLabel;
+        private TextMeshPro m_TransitionReadout;
         private Material m_TransitionLabelMaterial;
         private int m_PreviewRadiusInches;
-        private bool m_PreviewBelowFloor;
+        private int m_PreviewHeightInches;
         private int m_PreviewQuarterTurns;
         private CanvasScript m_PreviewCanvas;
         private CanvasScript m_TransitionSampleCanvas;
@@ -134,8 +134,8 @@ namespace TiltBrush
             bool belowFloor = coping.y <= 0f;
             Vector3 tip = roomFromCanvas * coping;
             Transform head = camera.transform;
-            Vector3 labelViewport = camera.WorldToViewportPoint(tip + head.up * 0.85f);
-            bool labelInView = InPreviewView(labelViewport, camera.nearClipPlane, 0.18f);
+            Vector3 labelViewport = camera.WorldToViewportPoint(tip + head.up * 1.1f);
+            bool labelInView = InPreviewView(labelViewport, camera.nearClipPlane, 0.28f);
             bool profileInView = false;
             if (!belowFloor)
             {
@@ -156,7 +156,7 @@ namespace TiltBrush
             {
                 if (labelViewport.z <= camera.nearClipPlane)
                     labelViewport = new Vector3(0.5f, 0.44f, 6f);
-                labelViewport.x = Mathf.Clamp(labelViewport.x, 0.21f, 0.79f);
+                labelViewport.x = Mathf.Clamp(labelViewport.x, 0.28f, 0.72f);
                 labelViewport.y = Mathf.Clamp(labelViewport.y, profileInView ? 0.24f : 0.44f, 0.81f);
             }
             Vector3 labelPosition = camera.ViewportToWorldPoint(labelViewport);
@@ -167,7 +167,7 @@ namespace TiltBrush
                 float profileHeight = belowFloor ? radius : coping.y;
                 float scale = 1.5f * readoutScale / Mathf.Max(radius, profileHeight);
                 Vector3 right = head.right * (quarterTurns >= 2 ? -1f : 1f);
-                Vector3 origin = labelPosition - head.up * (2.1f * readoutScale) - right * (0.75f * readoutScale);
+                Vector3 origin = labelPosition - head.up * (2.45f * readoutScale) - right * (0.75f * readoutScale);
                 for (int row = 0; row < m_TransitionPreviewPoints.Length; row++)
                 {
                     Vector2 sample = TransitionBrush.ProfilePoint(profileHeight, radius, row);
@@ -176,16 +176,19 @@ namespace TiltBrush
             }
             m_TransitionPreviewLine.SetPositions(m_TransitionPreviewPoints);
 
-            if (m_PreviewRadiusInches != inches || m_PreviewBelowFloor != belowFloor || m_PreviewQuarterTurns != quarterTurns)
+            int heightInches = Mathf.RoundToInt(coping.y / TransitionBrush.UnitsPerInch);
+            if (m_PreviewRadiusInches != inches || m_PreviewHeightInches != heightInches ||
+                m_PreviewQuarterTurns != quarterTurns)
             {
                 m_PreviewRadiusInches = inches;
-                m_PreviewBelowFloor = belowFloor;
+                m_PreviewHeightInches = heightInches;
                 m_PreviewQuarterTurns = quarterTurns;
-                m_TransitionRadiusLabel.text = $"{TransitionBrush.FormatRadius(inches)}  {quarterTurns * 90}°";
-                if (belowFloor)
-                    m_TransitionRadiusLabel.text += "\nBelow sketch floor";
+                m_TransitionReadout.text =
+                    $"Radius {TransitionBrush.FormatFeetAndInches(inches)}\n" +
+                    $"Height {TransitionBrush.FormatFeetAndInches(heightInches)}\n" +
+                    $"Orientation {quarterTurns * 90}°";
             }
-            Transform label = m_TransitionRadiusLabel.transform;
+            Transform label = m_TransitionReadout.transform;
             label.SetPositionAndRotation(labelPosition, Quaternion.LookRotation(labelPosition - head.position, head.up));
             label.localScale = Vector3.one * (readoutScale / label.parent.lossyScale.x);
             m_TransitionPreviewStatus = profileInView ? "Full-size floor profile" :
@@ -203,7 +206,7 @@ namespace TiltBrush
 
             Camera camera = App.VrSdk.GetVrCamera();
             var line = m_TransitionPreviewLine;
-            var label = m_TransitionRadiusLabel;
+            var label = m_TransitionReadout;
             return $"{m_TransitionPreviewStatus}, camera layer={(camera.cullingMask & (1 << line.gameObject.layer)) != 0}, " +
                 $"line={line.enabled}, label={label.renderer.enabled}, text={label.text.Replace("\n", " / ")}, " +
                 $"heading={m_DisplayedTransitionOrientation.eulerAngles.y:F1}°, tracking={m_TransitionHeadingTracked}, " +
@@ -232,20 +235,20 @@ namespace TiltBrush
             m_TransitionPreviewLine.shadowCastingMode = ShadowCastingMode.Off;
             m_TransitionPreviewLine.receiveShadows = false;
 
-            var label = new GameObject("Transition radius");
+            var label = new GameObject("Transition measurements");
             label.layer = root.layer;
             label.transform.SetParent(root.transform, false);
-            m_TransitionRadiusLabel = label.AddComponent<TextMeshPro>();
-            m_TransitionRadiusLabel.alignment = TextAlignmentOptions.Center;
-            m_TransitionRadiusLabel.color = Color.white;
-            m_TransitionRadiusLabel.fontSize = 3.6f;
-            m_TransitionRadiusLabel.textWrappingMode = TextWrappingModes.NoWrap;
-            m_TransitionLabelMaterial = new Material(m_TransitionRadiusLabel.fontSharedMaterial);
+            m_TransitionReadout = label.AddComponent<TextMeshPro>();
+            m_TransitionReadout.alignment = TextAlignmentOptions.Center;
+            m_TransitionReadout.color = Color.white;
+            m_TransitionReadout.fontSize = 3.6f;
+            m_TransitionReadout.textWrappingMode = TextWrappingModes.NoWrap;
+            m_TransitionLabelMaterial = new Material(m_TransitionReadout.fontSharedMaterial);
             m_TransitionLabelMaterial.SetColor(ShaderUtilities.ID_OutlineColor, Color.black);
             m_TransitionLabelMaterial.SetFloat(ShaderUtilities.ID_OutlineWidth, 0.12f);
-            m_TransitionRadiusLabel.fontSharedMaterial = m_TransitionLabelMaterial;
-            m_TransitionRadiusLabel.renderer.shadowCastingMode = ShadowCastingMode.Off;
-            m_TransitionRadiusLabel.renderer.receiveShadows = false;
+            m_TransitionReadout.fontSharedMaterial = m_TransitionLabelMaterial;
+            m_TransitionReadout.renderer.shadowCastingMode = ShadowCastingMode.Off;
+            m_TransitionReadout.renderer.receiveShadows = false;
         }
     }
 }

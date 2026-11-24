@@ -17,7 +17,7 @@ namespace TiltBrush
         private const string kSweepLeftPreference = "TransitionSweepLeft";
         private const string kOrientationPreference = "TransitionQuarterTurns";
         internal const float UnitsPerInch = 0.0254f * App.METERS_TO_UNITS;
-        internal const float CheckerRepeat = 24f * UnitsPerInch;
+        private const float kConcreteRepeat = 3f * App.METERS_TO_UNITS;
         internal const int ArcSegments = 24;
         internal const int ProfilePoints = ArcSegments + 2;
         private const int kMaxStations = 65000 / ProfilePoints;
@@ -86,10 +86,10 @@ namespace TiltBrush
             set => PlayerPrefs.SetInt(kRadiusPreference, Mathf.Clamp(value, MinRadiusInches, MaxRadiusInches));
         }
 
-        internal static string FormatRadius(float inches)
+        internal static string FormatFeetAndInches(int inches)
         {
-            int rounded = Mathf.RoundToInt(inches);
-            return $"{rounded / 12} ft {rounded % 12} in";
+            int absolute = Mathf.Abs(inches);
+            return $"{(inches < 0 ? "-" : "")}{absolute / 12} ft {absolute % 12} in";
         }
 
         public override GeometryPool.VertexLayout GetVertexLayout(BrushDescriptor desc)
@@ -98,6 +98,7 @@ namespace TiltBrush
             {
                 bUseColors = true,
                 bUseNormals = true,
+                bUseTangents = true,
                 uv0Size = 2,
                 uv0Semantic = GeometryPool.Semantic.XyIsUv
             };
@@ -194,9 +195,10 @@ namespace TiltBrush
                     vertices[station * ProfilePoints + row] = ProfileVertex(coping, across, radius, row);
             }
 
+            // Double the previous whole-tile count on loops so the seam stays aligned.
             float repeatsPerUnit = closed
-                ? Mathf.Max(1, Mathf.RoundToInt(totalDistance / CheckerRepeat)) / totalDistance
-                : 1f / CheckerRepeat;
+                ? 2f * Mathf.Max(1, Mathf.RoundToInt(totalDistance / (2f * kConcreteRepeat))) / totalDistance
+                : 1f / kConcreteRepeat;
             float distance = 0f;
             for (int station = 0; station < count; station++)
             {
@@ -218,10 +220,16 @@ namespace TiltBrush
                         lower = 2;
                     Vector3 down = vertices[first + lower] - vertices[first + upper];
                     Vector3 normal = (reverseWinding ? Vector3.Cross(down, along) : Vector3.Cross(along, down)).normalized;
-                    SetVert(first, row, vertices[first + row], normal == Vector3.zero ? Vector3.up : normal,
-                        m_Stations[station].color, 1f);
+                    if (normal == Vector3.zero)
+                        normal = Vector3.up;
+                    SetVert(first, row, vertices[first + row], normal, m_Stations[station].color, 1f);
+                    Vector3 tangent = Vector3.ProjectOnPlane(along, normal);
+                    if (tangent.sqrMagnitude < 1e-10f)
+                        tangent = Vector3.Cross(normal, Mathf.Abs(normal.z) < 0.9f ? Vector3.forward : Vector3.right);
+                    float tangentSign = Vector3.Dot(Vector3.Cross(normal, tangent), down) < 0f ? -1f : 1f;
+                    SetTangent(first, row, tangent, tangentSign);
                     float profileDistance = row == 0 ? 0f : straightLength + (row - 1) * arcStep;
-                    SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / CheckerRepeat));
+                    SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / kConcreteRepeat));
                     if (station == count - 1 || row == ProfilePoints - 1)
                         continue;
                     // The last ring has the same positions as the first ring of a loop, with its own UVs.
