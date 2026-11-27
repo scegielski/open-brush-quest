@@ -29,6 +29,7 @@ Shader "Brush/TransitionSurface"
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include_with_pragmas "Packages/com.icosa.open-brush-unity-tools/Runtime/Shaders/0_Subgraphs/OpenBrushSelection.hlsl"
 
             TEXTURE2D(_MainTex);
             SAMPLER(sampler_MainTex);
@@ -36,6 +37,11 @@ Shader "Brush/TransitionSurface"
             SAMPLER(sampler_BumpMap);
             TEXTURE2D(_RoughnessMap);
             SAMPLER(sampler_RoughnessMap);
+            TEXTURECUBE(_CapturedEnvironment);
+            SAMPLER(sampler_CapturedEnvironment);
+            TEXTURECUBE(_CapturedDiffuseEnvironment);
+            SAMPLER(sampler_CapturedDiffuseEnvironment);
+            half _CapturedEnvironmentWeight;
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
                 half _BumpScale;
@@ -118,6 +124,60 @@ Shader "Brush/TransitionSurface"
                 #endif
             }
 
+            half3 SteelEnvironmentReflection(half3 directionWS, float3 positionWS)
+            {
+                const half roughness = 0.18h;
+                half coverage = 0.0h;
+                half3 reflection = 0.0h;
+                half captureWeight = saturate(_CapturedEnvironmentWeight);
+                UNITY_BRANCH
+                if (captureWeight > 0.0h)
+                {
+                    half mip = PerceptualRoughnessToMipmapLevel(roughness);
+                    half4 captured = SAMPLE_TEXTURECUBE_LOD(_CapturedEnvironment, sampler_CapturedEnvironment,
+                        directionWS, mip);
+                    coverage = saturate(captured.a) * captureWeight;
+                    half3 radiance = captured.rgb / max(captured.a, 0.0001h);
+#ifdef UNITY_COLORSPACE_GAMMA
+                    radiance = LinearToSRGB(radiance);
+#endif
+                    reflection = radiance * coverage;
+                }
+                UNITY_BRANCH
+                if (coverage < 1.0h)
+                    reflection += GlossyEnvironmentReflection(directionWS, positionWS, roughness, 1.0h) *
+                        (1.0h - coverage);
+                return reflection;
+            }
+
+            half3 CapturedConcreteLightGain(half3 normalWS)
+            {
+                half captureWeight = saturate(_CapturedEnvironmentWeight);
+                UNITY_BRANCH
+                if (captureWeight <= 0.0h)
+                    return 1.0h;
+
+                // The captured diffuse map is already cosine-convolved in linear space.
+                half4 irradiance = SAMPLE_TEXTURECUBE_LOD(_CapturedDiffuseEnvironment, sampler_CapturedDiffuseEnvironment,
+                    normalWS, 0);
+                half3 radiance = irradiance.rgb / max(irradiance.a, 0.0001h);
+                half3 gain = clamp(1.0h + 0.45h * (radiance - 0.35h), 0.85h, 1.25h);
+                gain = lerp(1.0h, gain, saturate(irradiance.a) * captureWeight);
+#ifdef UNITY_COLORSPACE_GAMMA
+                // A relative light gain uses the gamma exponent without the sRGB offset.
+                gain = LinearToGamma22(gain);
+#endif
+                return gain;
+            }
+
+            half4 FinishSurfaceColor(half3 color, half fog)
+            {
+                // The selection canvas uses the same per-eye emission as the stock brush shaders.
+                float3 highlighted;
+                AddSelectionEmission_float(color, highlighted);
+                return half4(MixFog(highlighted, fog), 1.0h);
+            }
+
             half4 Frag(Varyings input, FRONT_FACE_TYPE facing : FRONT_FACE_SEMANTIC) : SV_Target
             {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
@@ -127,11 +187,11 @@ Shader "Brush/TransitionSurface"
                 {
                     half3 normal = NormalizeNormalPerPixel(input.normalWS) * IS_FRONT_VFACE(facing, 1.0h, -1.0h);
                     half3 view = GetWorldSpaceNormalizeViewDir(input.positionWS);
-                    half3 reflection = GlossyEnvironmentReflection(reflect(-view, normal), input.positionWS, 0.18h, 1.0h);
+                    half3 reflection = SteelEnvironmentReflection(reflect(-view, normal), input.positionWS);
                     half3 unused, highlights;
                     SurfaceLighting(input.positionWS, normal, view, 96.0h, 0.95h, unused, highlights);
                     half3 steel = half3(0.10h, 0.11h, 0.13h) + reflection * half3(0.92h, 0.95h, 1.0h) + highlights;
-                    return half4(MixFog(steel * tint, input.fog), 1.0h);
+                    return FinishSurfaceColor(steel * tint, input.fog);
                 }
                 float2 concreteUV = TRANSFORM_TEX(input.uv, _MainTex);
                 // UVs describe a 3 m repeat. Use whole multiples so grout and coping joints close with the loop.
@@ -140,6 +200,7 @@ Shader "Brush/TransitionSurface"
                 half copingJoint = Joint(input.uv.x * 6.0, 0.004);
                 bool deck = input.surface.x > 0.5h;
                 bool coping = !deck && input.uv.y < 0.0;
+                bool mortarBand = input.surface.y > 1.5h;
                 bool tileBand = !deck && !coping && input.surface.y < 0.5h && tile.y < 3.0;
                 // A shared grout mask controls both the raised glaze and the direct specular response.
                 float2 tileOffset = frac(tile + 0.5) - 0.5;
@@ -173,15 +234,19 @@ Shader "Brush/TransitionSurface"
                 // Compress bright direct light smoothly to preserve contrast in the normal map.
                 half peak = Max3(diffuse.r, diffuse.g, diffuse.b);
                 half3 lighting = 0.33h + 0.10h * saturate(SampleSH(normal)) + diffuse * (0.85h / (0.75h + peak));
+                if (!tileBand && !coping)
+                    lighting *= CapturedConcreteLightGain(normal);
                 half3 concrete = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, concreteUV).rgb;
                 half3 color = tint * concrete;
+                if (mortarBand)
+                    color = half3(0.67h, 0.64h, 0.58h) * (0.86h + 0.14h * concrete.r);
                 if (tileBand)
                     color = lerp(half3(0.62h, 0.78h, 0.88h) * tint, half3(0.43h, 0.49h, 0.52h), grout);
                 if (coping)
                     color = lerp(concrete * 0.68h * tint, half3(0.60h, 0.58h, 0.53h), copingJoint * 0.72h);
                 if (deck)
                     color = tint * (concrete * 0.87h + 0.10h);
-                return half4(MixFog(color * lighting + specular, input.fog), 1.0h);
+                return FinishSurfaceColor(color * lighting + specular, input.fog);
             }
             ENDHLSL
         }

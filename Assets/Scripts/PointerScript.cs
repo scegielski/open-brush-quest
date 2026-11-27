@@ -350,6 +350,10 @@ namespace TiltBrush
                 {
                     SetTransitionRadiusForCanvas(current.Pose.scale);
                 }
+                else if (TransitionBrush.IsStandaloneSteelCoping(m_CurrentBrush))
+                {
+                    SetSteelDiameterForCanvas(current.Pose.scale);
+                }
                 else if (m_LastUsedBrushSize_CS != null)
                 {
                     SetBrushSizeInCurrentRange(current.Pose.scale * m_LastUsedBrushSize_CS.Value);
@@ -362,6 +366,10 @@ namespace TiltBrush
             if (TransitionBrush.IsTransition(m_CurrentBrush))
             {
                 SetTransitionRadiusForCanvas(current.scale);
+            }
+            else if (TransitionBrush.IsStandaloneSteelCoping(m_CurrentBrush))
+            {
+                SetSteelDiameterForCanvas(current.scale);
             }
             else if (m_LastUsedBrushSize_CS != null)
             {
@@ -406,13 +414,18 @@ namespace TiltBrush
 
         public void MarkBrushSizeUsed()
         {
-            if (!TransitionBrush.IsTransition(m_CurrentBrush))
+            if (!TransitionBrush.IsTransition(m_CurrentBrush) && !TransitionBrush.IsStandaloneSteelCoping(m_CurrentBrush))
                 m_LastUsedBrushSize_CS = (1 / App.ActiveCanvas.Pose.scale) * BrushSizeAbsolute;
         }
 
         internal void SetTransitionRadiusForCanvas(float canvasScale)
         {
             _SetBrushSizeAbsolute(TransitionBrush.RadiusInches * TransitionBrush.UnitsPerInch * canvasScale);
+        }
+
+        internal void SetSteelDiameterForCanvas(float canvasScale)
+        {
+            _SetBrushSizeAbsolute(TransitionBrush.SteelDiameterInches * TransitionBrush.UnitsPerInch * canvasScale);
         }
 
         void Update()
@@ -645,7 +658,7 @@ namespace TiltBrush
             if (tracksController && m_TransitionStartFrame != Time.frameCount)
             {
                 transition.CurrentControllerOrientation = PointerManager.m_Instance.GetTransitionStrokeOrientation(
-                    this, m_TransitionStrokeCanvas, xf_LS.rotation, starting: false);
+                    this, m_TransitionStrokeCanvas, xf_LS.rotation);
             }
             if (PointerManager.m_Instance.CurrentSymmetryMode ==
                 PointerManager.SymmetryMode.ScriptedSymmetryMode)
@@ -924,6 +937,8 @@ namespace TiltBrush
                     ? m_ToolScriptPreviewColor ?? m_CurrentColor
                     : m_CurrentColor;
                 m_PreviewLine.SetPreviewProperties(previewColor, m_CurrentBrushSize);
+                if (m_PreviewLine is TransitionBrush transition && TransitionBrush.HasSteelCoping(transition.Descriptor))
+                    transition.NewStrokeSteelDiameterHalfInches = TransitionBrush.SteelDiameterHalfInches;
             }
             if (m_PreviewLight)
             {
@@ -1002,6 +1017,10 @@ namespace TiltBrush
                 {
                     SetTransitionRadiusForCanvas(Coords.CanvasPose.scale);
                 }
+                else if (TransitionBrush.IsStandaloneSteelCoping(rBrush))
+                {
+                    SetSteelDiameterForCanvas(Coords.CanvasPose.scale);
+                }
                 else if (m_LastUsedBrushSize_CS != null)
                 {
                     SetBrushSizeInCurrentRange(Coords.CanvasPose.scale * m_LastUsedBrushSize_CS.Value);
@@ -1010,7 +1029,7 @@ namespace TiltBrush
                 {
                     BrushSize01 = 0.5f;
                 }
-                if (!TransitionBrush.IsTransition(rBrush))
+                if (!TransitionBrush.IsTransition(rBrush) && !TransitionBrush.IsStandaloneSteelCoping(rBrush))
                     m_LastUsedBrushSize_CS = (1 / App.ActiveCanvas.Pose.scale) * BrushSizeAbsolute;
 
                 DisablePreviewLine();
@@ -1024,16 +1043,19 @@ namespace TiltBrush
                 m_CurrentBrush = rBrush;
                 ShowSizeIndicator(m_ShowBrushSizeIndicator);
                 if (m_BrushPressureIndicator)
-                    m_BrushPressureIndicator.gameObject.SetActive(!TransitionBrush.IsTransition(rBrush));
+                    m_BrushPressureIndicator.gameObject.SetActive(ShowsBrushRadiusIndicators);
             }
             ResetAudio();
         }
+
+        private bool ShowsBrushRadiusIndicators =>
+            !TransitionBrush.IsTransition(m_CurrentBrush) && !ModularCopingBrush.IsModular(m_CurrentBrush);
 
         public void ShowSizeIndicator(bool show)
         {
             m_ShowBrushSizeIndicator = show;
             if (m_BrushSizeIndicator)
-                m_BrushSizeIndicator.gameObject.SetActive(show && !TransitionBrush.IsTransition(m_CurrentBrush));
+                m_BrushSizeIndicator.gameObject.SetActive(show && ShowsBrushRadiusIndicators);
         }
 
         void _SetBrushSizeAbsolute(float value)
@@ -1169,12 +1191,13 @@ namespace TiltBrush
                 m_CurrentBrushSize = m_CurrentCreator.ProcessBrushSize(m_CurrentBrushSize);
             }
 
-            if (!TransitionBrush.IsTransition(desc))
+            bool usesFixedDimensions = TransitionBrush.IsTransition(desc) || TransitionBrush.IsStandaloneSteelCoping(desc);
+            if (!usesFixedDimensions)
                 m_LastUsedBrushSize_CS = (1 / Coords.CanvasPose.scale) * BrushSizeAbsolute;
             m_LineLength_CS = 0.0f;
 
             float jitteredBrushSize = m_CurrentBrushSize;
-            if (PointerManager.m_Instance.JitterEnabled && !TransitionBrush.IsTransition(desc))
+            if (PointerManager.m_Instance.JitterEnabled && !usesFixedDimensions)
             {
                 jitteredBrushSize = PointerManager.m_Instance.GenerateJitteredSize(desc, m_CurrentBrushSize);
             }
@@ -1185,7 +1208,7 @@ namespace TiltBrush
             {
                 m_TransitionStartFrame = Time.frameCount;
                 m_TransitionStartOrientation = PointerManager.m_Instance.GetTransitionStrokeOrientation(
-                    this, canvas, xf_CS.rotation, starting: true);
+                    this, canvas, xf_CS.rotation);
                 xf_CS.rotation = m_TransitionStartOrientation;
             }
 
@@ -1199,6 +1222,8 @@ namespace TiltBrush
                 transition.CurrentControllerOrientation = xf_CS.rotation;
                 if (!replayingStroke && TransitionBrush.HasDeck(desc))
                     transition.NewStrokeDeckDepthInches = TransitionBrush.DeckDepthInches;
+                if (!replayingStroke && TransitionBrush.HasSteelCoping(desc))
+                    transition.NewStrokeSteelDiameterHalfInches = TransitionBrush.SteelDiameterHalfInches;
             }
         }
 
@@ -1270,6 +1295,8 @@ namespace TiltBrush
             else if (m_CurrentLine is TransitionBrush transition)
             {
                 strokeFlags |= TransitionBrush.FlagsForQuarterTurns(transition.QuarterTurns);
+                if (TransitionBrush.HasSteelCoping(transition.Descriptor))
+                    strokeFlags = TransitionBrush.FlagsWithSteelDiameter(strokeFlags, transition.NewStrokeSteelDiameterHalfInches);
                 if (transition.TrackControllerForNewStroke)
                     strokeFlags |= SketchMemoryScript.StrokeFlags.TransitionControllerHeading;
                 if (!bDiscard && transition.NewStrokeDeckDepthInches is float deckDepth)

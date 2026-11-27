@@ -9,8 +9,13 @@ namespace TiltBrush
     public class TransitionSettingsPanel : BasePanel
     {
         [SerializeField] private TextMeshPro m_ContextLabel;
+        [SerializeField] private TextMeshPro m_RadiusLabel;
         [SerializeField] private TextMeshPro m_RadiusValue;
         [SerializeField] private TextMeshPro m_DeckDepthValue;
+        [SerializeField] private TextMeshPro m_SteelDiameterValue;
+        [SerializeField] private Transform m_PrimaryControls;
+        [SerializeField] private Transform m_RampControls;
+        [SerializeField] private GameObject m_SteelDiameterControls;
         [SerializeField] private TextActionButton[] m_CopingOptions;
         [SerializeField] private TextActionButton[] m_TileOptions;
         [SerializeField] private TextActionButton[] m_DeckOptions;
@@ -32,7 +37,22 @@ namespace TiltBrush
             if (tool == null || !tool.TryGetTransitionSettings(out var settings))
                 return;
 
-            settings.RadiusHalfInches += direction;
+            if (settings.IsStandaloneSteel)
+                settings.SteelDiameterHalfInches += direction;
+            else
+                settings.RadiusHalfInches += direction;
+            tool.SetTransitionSettings(settings);
+            UpdateReadouts();
+        }
+
+        public void StepSteelCopingDiameter(int direction)
+        {
+            var tool = ActiveTool;
+            if (tool == null || !tool.TryGetTransitionSettings(out var settings) ||
+                settings.IsStandaloneSteel || settings.Options.Coping != TransitionBrush.CopingKind.Steel)
+                return;
+
+            settings.SteelDiameterHalfInches += direction;
             tool.SetTransitionSettings(settings);
             UpdateReadouts();
         }
@@ -92,10 +112,27 @@ namespace TiltBrush
                 return;
 
             var previous = m_DisplayedSettings;
-            if (previous?.IsSelection != settings.IsSelection)
-                m_ContextLabel.text = settings.IsSelection ? "Selected Transition" : "New Transition";
-            if (previous?.RadiusHalfInches != settings.RadiusHalfInches)
-                m_RadiusValue.text = TransitionBrush.FormatFeetAndInches(settings.RadiusHalfInches * 0.5f);
+            bool standalone = settings.IsStandaloneSteel;
+            bool typeChanged = previous?.IsStandaloneSteel != standalone;
+            bool showsSteelDiameter = !standalone && settings.Options.Coping == TransitionBrush.CopingKind.Steel;
+            if (typeChanged || previous?.Options.Coping != settings.Options.Coping)
+                ApplyLayout(standalone, showsSteelDiameter);
+            if (typeChanged || previous?.IsSelection != settings.IsSelection)
+            {
+                m_ContextLabel.text = standalone
+                    ? (settings.IsSelection ? "Selected Steel Coping" : "Steel Coping")
+                    : (settings.IsSelection ? "Selected Transition" : "New Transition");
+            }
+            if (typeChanged)
+                m_RadiusLabel.text = standalone ? "Diameter" : "Radius";
+            if (typeChanged || previous?.RadiusHalfInches != settings.RadiusHalfInches ||
+                previous?.SteelDiameterHalfInches != settings.SteelDiameterHalfInches)
+            {
+                int primaryDimension = standalone ? settings.SteelDiameterHalfInches : settings.RadiusHalfInches;
+                m_RadiusValue.text = TransitionBrush.FormatFeetAndInches(primaryDimension * 0.5f);
+                m_SteelDiameterValue.text =
+                    TransitionBrush.FormatFeetAndInches(settings.SteelDiameterHalfInches * 0.5f);
+            }
             if (previous?.DeckDepthHalfInches != settings.DeckDepthHalfInches ||
                 previous?.MixedDeckDepth != settings.MixedDeckDepth)
             {
@@ -110,6 +147,16 @@ namespace TiltBrush
                 SelectOption(m_DeckOptions, settings.Options.Deck ? 1 : 0);
 
             m_DisplayedSettings = settings;
+        }
+
+        private void ApplyLayout(bool standalone, bool showsSteelDiameter)
+        {
+            const float halfRowSpacing = 0.235f;
+            float expandedOffset = showsSteelDiameter ? halfRowSpacing : 0f;
+            m_PrimaryControls.localPosition = Vector3.up * (standalone ? -0.9f : expandedOffset);
+            m_RampControls.localPosition = Vector3.down * expandedOffset;
+            m_RampControls.gameObject.SetActive(!standalone);
+            m_SteelDiameterControls.SetActive(showsSteelDiameter);
         }
 
         private static void SelectOption(TextActionButton[] buttons, int selected)

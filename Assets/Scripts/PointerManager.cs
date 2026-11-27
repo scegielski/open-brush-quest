@@ -935,11 +935,10 @@ namespace TiltBrush
         }
 
         internal Quaternion GetTransitionStrokeOrientation(PointerScript pointer, CanvasScript canvas,
-            Quaternion fallback, bool starting)
+            Quaternion fallback)
         {
             if (pointer == MainPointer && m_FreePaintTool != null)
-                return starting ? m_FreePaintTool.CaptureTransitionOrientation(canvas, fallback) :
-                    m_FreePaintTool.SampleTransitionOrientation(canvas, fallback);
+                return m_FreePaintTool.SampleTransitionOrientation(canvas, fallback);
             return TransitionBrush.HorizontalOrientation(fallback);
         }
 
@@ -1032,6 +1031,18 @@ namespace TiltBrush
             }
         }
 
+        internal void SetSteelDiameterHalfInches(int halfInches)
+        {
+            TransitionBrush.SteelDiameterHalfInches = halfInches;
+            for (int i = 0; i < m_NumActivePointers; i++)
+            {
+                var pointer = m_Pointers[i].m_Script;
+                if (TransitionBrush.IsStandaloneSteelCoping(pointer.CurrentBrush))
+                    pointer.SetSteelDiameterForCanvas(App.ActiveCanvas.Pose.scale);
+            }
+            App.Switchboard.TriggerBrushSizeChanged();
+        }
+
         public void AdjustAllPointersBrushSize01(float dt, bool useExtendedRange = false)
         {
             for (int i = 0; i < m_NumActivePointers; ++i)
@@ -1040,10 +1051,12 @@ namespace TiltBrush
             }
         }
 
-        public void SetBrushForAllPointers(BrushDescriptor desc)
+        public void SetBrushForAllPointers(BrushDescriptor desc) => SetBrushForAllPointers(desc, finishSpline: true);
+
+        internal void SetBrushForAllPointers(BrushDescriptor desc, bool finishSpline)
         {
-            if (m_FreePaintTool != null && desc != null && MainPointer.CurrentBrush != desc)
-                m_FreePaintTool.FinishSplineForBrushChange();
+            if (finishSpline && m_FreePaintTool != null && desc != null && MainPointer.CurrentBrush != desc)
+                m_FreePaintTool.TryFinishSplineForBrushChange();
 
             for (int i = 0; i < m_NumActivePointers; ++i)
             {

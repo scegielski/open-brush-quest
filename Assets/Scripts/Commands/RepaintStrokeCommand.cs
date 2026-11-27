@@ -22,6 +22,8 @@ namespace TiltBrush
 {
     public class RepaintStrokeCommand : BaseCommand
     {
+        private const StrokeFlags kBrushAppearanceFlags = TransitionBrush.SurfaceOptionFlags |
+            StrokeFlags.SteelCopingDiameterMask;
         private List<Stroke> m_TargetStrokes;
         private List<Color> m_StartColors;
         private List<Guid> m_StartGuids;
@@ -30,6 +32,7 @@ namespace TiltBrush
         private List<Guid> m_EndGuids;
         private List<float> m_EndSizes;
         private List<StrokeFlags> m_StartSurfaceOptions;
+        private List<StrokeFlags> m_EndSurfaceOptions;
 
         public RepaintStrokeCommand(
             Stroke stroke, Color newcolor, Guid newGuid, float newSize, BaseCommand parent = null)
@@ -43,11 +46,22 @@ namespace TiltBrush
             m_StartColors = strokes.Select(s => s.m_Color).ToList();
             m_StartGuids = strokes.Select(s => s.m_BrushGuid).ToList();
             m_StartSizes = strokes.Select(s => s.m_BrushSize).ToList();
-            m_StartSurfaceOptions = strokes.Select(s => s.m_Flags & TransitionBrush.SurfaceOptionFlags).ToList();
+            m_StartSurfaceOptions = strokes.Select(s => s.m_Flags & kBrushAppearanceFlags).ToList();
 
             m_EndColors = newcolors.ToList();
             m_EndGuids = newGuids.ToList();
             m_EndSizes = newSizes.ToList();
+            int steelDiameter = TransitionBrush.SteelDiameterHalfInches;
+            m_EndSurfaceOptions = new List<StrokeFlags>(strokes.Count);
+            for (int i = 0; i < strokes.Count; i++)
+            {
+                StrokeFlags options = StrokeFlags.None;
+                if (m_EndGuids[i] == m_StartGuids[i])
+                    options = m_StartSurfaceOptions[i];
+                else if (TransitionBrush.HasSteelCoping(BrushCatalog.m_Instance.GetBrush(m_EndGuids[i])))
+                    options = TransitionBrush.FlagsWithSteelDiameter(options, steelDiameter);
+                m_EndSurfaceOptions.Add(options);
+            }
         }
 
         public override bool NeedsSave { get { return true; } }
@@ -59,7 +73,7 @@ namespace TiltBrush
                 color, BrushCatalog.m_Instance.GetBrush(brushGuid).m_ColorLuminanceMin);
             stroke.m_BrushGuid = brushGuid;
             stroke.m_BrushSize = brushSize;
-            stroke.m_Flags = (stroke.m_Flags & ~TransitionBrush.SurfaceOptionFlags) | surfaceOptions;
+            stroke.m_Flags = (stroke.m_Flags & ~kBrushAppearanceFlags) | surfaceOptions;
             stroke.InvalidateCopy();
             stroke.Uncreate();
             stroke.Recreate();
@@ -69,8 +83,8 @@ namespace TiltBrush
         {
             for (var i = 0; i < m_TargetStrokes.Count; i++)
             {
-                StrokeFlags options = m_EndGuids[i] == m_StartGuids[i] ? m_StartSurfaceOptions[i] : StrokeFlags.None;
-                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_EndColors[i], m_EndGuids[i], m_EndSizes[i], options);
+                ApplyColorAndBrushToObject(m_TargetStrokes[i], m_EndColors[i], m_EndGuids[i], m_EndSizes[i],
+                    m_EndSurfaceOptions[i]);
             }
         }
 

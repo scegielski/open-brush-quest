@@ -40,7 +40,14 @@ namespace TiltBrush
 
         public void SetActiveBrush(BrushDescriptor brush)
         {
-            PointerManager.m_Instance.SetBrushForAllPointers(brush);
+            var pointers = PointerManager.m_Instance;
+            var sketchSurface = SketchSurfacePanel.m_Instance;
+            if (pointers.MainPointer.CurrentBrush != brush &&
+                sketchSurface.GetToolOfType(BaseTool.ToolType.FreePaintTool) is FreePaintTool freePaint &&
+                !freePaint.TryFinishSplineForBrushChange(brush))
+                return;
+
+            pointers.SetBrushForAllPointers(brush, finishSpline: false);
             AudioClip buttonAudio = BrushCatalog.m_Instance.GetBrush(brush.m_Guid).m_ButtonAudio;
             if (buttonAudio != null)
             {
@@ -50,7 +57,6 @@ namespace TiltBrush
             m_ActiveBrush = brush;
 
             // Reset our tool when the user picks a new brush unless it is repainting.
-            var sketchSurface = SketchSurfacePanel.m_Instance;
             if (sketchSurface.ActiveTool is RepaintTool repaint)
             {
                 // The trigger that picks a brush from the palette must not repaint the sketch.
@@ -66,6 +72,25 @@ namespace TiltBrush
             {
                 BrushChanged(brush);
             }
+        }
+
+        internal bool SetActiveBrushFromSpline(BrushDescriptor brush)
+        {
+            if (brush == null)
+                return false;
+
+            var pointers = PointerManager.m_Instance;
+            bool pointerBrushChanged = pointers.MainPointer.CurrentBrush != brush;
+            if (pointerBrushChanged)
+                pointers.SetBrushForAllPointers(brush, finishSpline: false);
+
+            if (pointerBrushChanged || m_ActiveBrush != brush)
+            {
+                m_ActiveBrush = brush;
+                BrushChanged?.Invoke(brush);
+            }
+
+            return pointerBrushChanged;
         }
 
         public void SetBrushToDefault()

@@ -326,7 +326,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &4000012875892576
 Transform:
   m_ObjectHideFlags: 0
@@ -1001,7 +1001,7 @@ MonoBehaviour:
   m_Tool: 11
   m_HighlightScale: 1.2
   m_MinAngle: 145
-  m_MaxAngle: 240
+  m_MaxAngle: 270
   m_ButtonRenderer: {fileID: 23000010054112294}
   m_Border: {fileID: 23000010572119690}
 --- !u!1 &1000012857661546
@@ -1662,7 +1662,7 @@ MonoBehaviour:
   m_Icon: {fileID: 2800000, guid: 6d83ff48989734a4fb3ac917bd3ba13f, type: 3}
   m_Tool: 21
   m_HighlightScale: 1.2
-  m_MinAngle: 300
+  m_MinAngle: 270
   m_MaxAngle: 395
   m_ButtonRenderer: {fileID: 23075095884181564}
   m_Border: {fileID: 23513296497799738}

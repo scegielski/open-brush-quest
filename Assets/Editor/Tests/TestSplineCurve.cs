@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -29,6 +30,37 @@ namespace TiltBrush
         }
 
         [Test]
+        public void GrabbedTransitionKnotFollowsYawThroughAVerticalControllerPose()
+        {
+            Quaternion knot = Quaternion.Euler(0f, 65f, 0f);
+            Quaternion controller = Quaternion.Euler(85f, 35f, 0f);
+            Quaternion tilted = Quaternion.AngleAxis(20f, controller * Vector3.right) * controller;
+            Quaternion heading = SplineCurve.RotateGrabbedKnotAroundUp(knot, controller, tilted, knot);
+            Assert.That(Quaternion.Angle(heading, knot), Is.LessThan(0.1f));
+
+            Quaternion yaw = Quaternion.AngleAxis(32f, Vector3.up);
+            heading = SplineCurve.RotateGrabbedKnotAroundUp(knot, controller, yaw * tilted, knot);
+            Assert.That(Quaternion.Angle(heading, yaw * knot), Is.LessThan(0.1f));
+            Quaternion inverted = Quaternion.AngleAxis(180f, Vector3.right) * controller;
+            Assert.That(SplineCurve.RotateGrabbedKnotAroundUp(knot, controller, inverted, heading),
+                Is.EqualTo(heading));
+        }
+
+        [TestCase(0f, 7.8f, 15f, true, 0f)]
+        [TestCase(0f, 8.2f, 15f, true, 15f)]
+        [TestCase(15f, 7.2f, 0f, true, 15f)]
+        [TestCase(15f, 6.8f, 0f, true, 0f)]
+        [TestCase(359f, 0.5f, 0.5f, false, 0.5f)]
+        [TestCase(10f, 10.1f, 10.1f, false, 10f)]
+        public void GrabbedTransitionHeadingDoesNotChatterAroundSnapBoundaries(float previous, float desired,
+            float quantized, bool snap, float expected)
+        {
+            Quaternion Yaw(float angle) => Quaternion.AngleAxis(angle, Vector3.up);
+            Quaternion heading = SplineCurve.StabilizeGrabbedHeading(Yaw(previous), Yaw(desired), Yaw(quantized), snap);
+            Assert.That(Quaternion.Angle(heading, Yaw(expected)), Is.LessThan(0.1f));
+        }
+
+        [Test]
         public void GridSnapsEachEnabledAxisAndPreservesDisabledAxes()
         {
             var point = new Vector3(1.48f, 2.82f, -1.48f);
@@ -36,6 +68,145 @@ namespace TiltBrush
                 Is.EqualTo(new Vector3(1f, 2.82f, -1f)));
             Assert.That(FreePaintTool.RoundGridPosition(point, 0.5f, true, true, true),
                 Is.EqualTo(new Vector3(1.5f, 3f, -1.5f)));
+        }
+
+        [Test]
+        public void CurveSelectionRayHitsTheRearDeckAndEndOfTheRenderedMesh()
+        {
+            var original = new GameObject("Hidden original stroke");
+            var preview = new GameObject("Live spline mesh", typeof(MeshFilter), typeof(MeshRenderer));
+            var mesh = new Mesh();
+            try
+            {
+                original.SetActive(false);
+                mesh.vertices = new[]
+                {
+                    new Vector3(-2f, 0f, -1f), new Vector3(2f, 0f, -1f),
+                    new Vector3(2f, 2f, -1f), new Vector3(-2f, 2f, -1f),
+                    new Vector3(-2f, 0f, 1f), new Vector3(2f, 0f, 1f),
+                    new Vector3(2f, 2f, 1f), new Vector3(-2f, 2f, 1f),
+                };
+                mesh.triangles = new[] { 3, 2, 6, 3, 6, 7, 0, 3, 7, 0, 7, 4, 4, 5, 6, 4, 6, 7 };
+                preview.GetComponent<MeshFilter>().sharedMesh = mesh;
+                preview.transform.SetPositionAndRotation(new Vector3(2f, 1f, 5f), Quaternion.Euler(8f, 43f, 14f));
+                preview.transform.localScale = new Vector3(1.6f, 2f, 0.5f);
+                var stroke = new Stroke { m_Type = Stroke.Type.BrushStroke, m_Object = original };
+                var picker = new SplineStrokePicker();
+                var aims = new[]
+                {
+                    (new Vector3(-1f, 2f, 0.25f), Vector3.up),
+                    (new Vector3(-2f, 1f, 0.25f), Vector3.left),
+                    (new Vector3(-0.5f, 1f, 1f), Vector3.forward),
+                };
+                foreach (var (surface, normal) in aims)
+                {
+                    picker.BeginQuery();
+                    Vector3 point = preview.transform.TransformPoint(surface);
+                    Vector3 outward = preview.transform.TransformDirection(normal);
+                    var ray = new Ray(point + outward * 3f, -outward);
+                    float depth = 2.9f;
+                    Assert.That(picker.TryHitStroke(stroke, preview, ray, ref depth), Is.False);
+                    depth = 10f;
+                    Assert.That(picker.TryHitStroke(stroke, null, ray, ref depth), Is.False);
+                    Assert.That(picker.TryHitStroke(stroke, preview, ray, ref depth), Is.True);
+                    Assert.That(depth, Is.EqualTo(3f).Within(1e-4f));
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(preview);
+                UnityEngine.Object.DestroyImmediate(original);
+                UnityEngine.Object.DestroyImmediate(mesh);
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CurveSelectionReadsOnlyTheStrokeRangeInAHotOrColdBatch(bool cold)
+        {
+            var owner = new GameObject("Spline batch selection test");
+            var mesh = new Mesh();
+            var geometry = new GeometryPool { Layout = new GeometryPool.VertexLayout() };
+            try
+            {
+                geometry.m_Vertices.AddRange(new[]
+                {
+                    new Vector3(-1f, -1f, 2f), new Vector3(0f, 1f, 2f), new Vector3(1f, -1f, 2f),
+                    new Vector3(-1f, -1f, 4f), new Vector3(0f, 1f, 4f), new Vector3(1f, -1f, 4f),
+                });
+                geometry.m_Tris.AddRange(new[] { 0, 1, 2, 3, 4, 5 });
+                mesh.SetVertices(geometry.m_Vertices);
+                mesh.SetTriangles(geometry.m_Tris, 0);
+                if (cold)
+                    geometry.MakeGeometryNotResident(mesh);
+                var batch = owner.AddComponent<Batch>();
+                typeof(Batch).GetField("m_Geometry", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(batch, geometry);
+                Stroke StrokeAt(int index, float z) => new Stroke
+                {
+                    m_Type = Stroke.Type.BatchedBrushStroke,
+                    m_BatchSubset = new BatchSubset
+                    {
+                        m_ParentBatch = batch, m_Active = true, m_iTriIndex = index, m_nTriIndex = 3,
+                        m_Bounds = new Bounds(new Vector3(0f, 0f, z), new Vector3(2f, 2f, 0f)),
+                    },
+                };
+                var far = StrokeAt(3, 4f);
+                var near = StrokeAt(0, 2f);
+                var picker = new SplineStrokePicker();
+                picker.BeginQuery();
+                var ray = new Ray(Vector3.zero, Vector3.forward);
+                float depth = 5f;
+                Assert.That(picker.TryHitStroke(far, null, ray, ref depth), Is.True);
+                Assert.That(depth, Is.EqualTo(4f));
+                Assert.That(picker.TryHitStroke(near, null, ray, ref depth), Is.True);
+                Assert.That(depth, Is.EqualTo(2f));
+                Assert.That(picker.TryHitStroke(far, null, ray, ref depth), Is.False);
+                Assert.That(geometry.IsGeometryResident, Is.EqualTo(!cold));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+                geometry.Destroy();
+                UnityEngine.Object.DestroyImmediate(mesh);
+            }
+        }
+
+        [Test]
+        public void CurveSelectionBeamUsesTheSolidOverlayAndEndsAtItsHit()
+        {
+            var owner = new GameObject("Spline ray test");
+            owner.SetActive(false);
+            Material beamMaterial = null;
+            try
+            {
+                var tool = owner.AddComponent<FreePaintTool>();
+                const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
+                var toolType = typeof(FreePaintTool);
+                var preview = new GameObject("Spline preview");
+                preview.transform.SetParent(owner.transform, false);
+                toolType.GetField("m_SplinePreview", fields).SetValue(tool, preview);
+                var updateRay = toolType.GetMethod("UpdateSplineSelectionRay", fields);
+                var ray = new Ray(new Vector3(2f, 1f, 4f), Vector3.forward);
+                updateRay.Invoke(tool, new object[] { ray, 12f, false });
+                var beam = preview.GetComponentInChildren<LineRenderer>(true);
+                beamMaterial = beam.sharedMaterial;
+                Assert.That(beamMaterial.shader.name, Is.EqualTo("Custom/TransitionPreviewLine"));
+                Assert.That(UnityEditor.ShaderUtil.ShaderHasError(beamMaterial.shader), Is.False);
+                Assert.That(beamMaterial.GetFloat("_Dashed"), Is.Zero);
+                Assert.That(beamMaterial.color.b, Is.GreaterThan(beamMaterial.color.r));
+                Assert.That(beam.useWorldSpace, Is.True);
+
+                updateRay.Invoke(tool, new object[] { ray, 3f, true });
+                Assert.That(beamMaterial.color.r, Is.GreaterThan(beamMaterial.color.b));
+                Assert.That(beam.GetPosition(0), Is.EqualTo(ray.origin));
+                Assert.That(beam.GetPosition(1), Is.EqualTo(ray.GetPoint(3f)));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(beamMaterial);
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
         }
 
         private readonly List<TrTransform> m_Samples = new();
@@ -152,6 +323,8 @@ namespace TiltBrush
                             (TransitionBrush.DefaultDeckDepthInches / (float)TransitionBrush.MaxDeckDepthInches)
                     }).ToArray()
                 };
+                if (!legacy)
+                    stroke.m_Flags = TransitionBrush.FlagsWithSteelDiameter(stroke.m_Flags, 13);
                 var ordinaryStroke = new StrokeData(stroke) { m_SplineKnotCount = 0, m_SplineControlPoints = null };
                 var snapshots = new[]
                 {
@@ -177,6 +350,7 @@ namespace TiltBrush
                 Assert.That(loaded[0].m_SplineControlPoints == null, Is.EqualTo(legacy));
                 Assert.That(loaded[0].m_BrushGuid, Is.EqualTo(stroke.m_BrushGuid));
                 Assert.That(loaded[0].m_Flags, Is.EqualTo(stroke.m_Flags));
+                Assert.That(TransitionBrush.SteelDiameterInchesFor(loaded[0]), Is.EqualTo(legacy ? 2f : 6.5f));
                 Assert.That(SplineCurve.AutoOrients(loaded[0]), Is.EqualTo(!legacy));
                 Assert.That(loaded[0].m_BrushSize, Is.EqualTo(stroke.m_BrushSize));
                 if (!legacy)
@@ -254,6 +428,106 @@ namespace TiltBrush
                 Is.EqualTo(2 * stride + stride / 2));
             Assert.That(SplineCurve.GetSourceSampleIndex(4 * stride, 3, 4, 3, 0.5f, oldClosed: true),
                 Is.EqualTo(3 * stride));
+        }
+
+        [Test]
+        public void SplinePanelBindsEveryActionInOneGridWithoutTooltips()
+        {
+            var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/SplinePanel.prefab");
+            var panel = prefab.GetComponent<SplinePanel>();
+            var serializedPanel = new UnityEditor.SerializedObject(panel);
+            var actions = serializedPanel.FindProperty("m_Actions");
+            Assert.That(actions.arraySize, Is.EqualTo(Enum.GetValues(typeof(FreePaintTool.SplineAction)).Length));
+
+            var grid = new[]
+            {
+                (FreePaintTool.SplineAction.Draw, "Draw"),
+                (FreePaintTool.SplineAction.MoveAndRotate, "Edit"),
+                (FreePaintTool.SplineAction.SelectCurve, "Select Curve"),
+                (FreePaintTool.SplineAction.NewSpline, "New Spline"),
+                (FreePaintTool.SplineAction.Append, "Append Point"),
+                (FreePaintTool.SplineAction.Insert, "Insert Point"),
+                (FreePaintTool.SplineAction.Delete, "Delete Point"),
+                (FreePaintTool.SplineAction.DeckDepth, "Deck Depth"),
+                (FreePaintTool.SplineAction.ToggleLoop, "Loop: Open"),
+                (FreePaintTool.SplineAction.ToggleAutoOrient, "Auto Orient: Off"),
+            };
+            Assert.That(actions.arraySize, Is.EqualTo(grid.Length));
+            for (int slot = 0; slot < grid.Length; ++slot)
+            {
+                var (action, label) = grid[slot];
+                int index = (int)action;
+                var button = (TextActionButton)actions.GetArrayElementAtIndex(index).objectReferenceValue;
+                Assert.That(button.m_ButtonLabel, Is.EqualTo(label));
+                Assert.That(button.gameObject.activeSelf, Is.True, label);
+                Assert.That(button.transform.IsChildOf(panel.transform), Is.True, label);
+                var position = new Vector3(slot % 2 == 0 ? -0.63f : 0.63f, 0.84f - (slot / 2) * 0.42f, -0.11f);
+                Assert.That(Vector3.Distance(button.transform.localPosition, position), Is.LessThan(0.0001f), label);
+                Assert.That(button.transform.localScale, Is.EqualTo(new Vector3(1.25f, 1.25f, 1f)), label);
+                var serializedButton = new UnityEditor.SerializedObject(button);
+                var descriptionType = serializedButton.FindProperty("m_DescriptionType");
+                Assert.That(descriptionType.enumNames[descriptionType.enumValueIndex], Is.EqualTo(nameof(DescriptionType.None)), label);
+                var calls = serializedButton.FindProperty("m_Action.m_PersistentCalls.m_Calls");
+                var call = calls.GetArrayElementAtIndex(0);
+                Assert.That(call.FindPropertyRelative("m_Target").objectReferenceValue, Is.EqualTo(panel));
+                Assert.That(call.FindPropertyRelative("m_MethodName").stringValue, Is.EqualTo(nameof(SplinePanel.ChooseAction)));
+                Assert.That(call.FindPropertyRelative("m_Arguments.m_IntArgument").intValue, Is.EqualTo(index));
+            }
+        }
+
+        [TestCase(typeof(EraserTool), BaseTool.ToolType.EraserTool, true)]
+        [TestCase(typeof(DropperTool), BaseTool.ToolType.DropperTool, true)]
+        [TestCase(typeof(SelectionTool), BaseTool.ToolType.SelectionTool, true)]
+        [TestCase(typeof(BaseTool), BaseTool.ToolType.Selection, true)]
+        [TestCase(typeof(BaseTool), BaseTool.ToolType.ColorPicker, false)]
+        public void StrokeToolsRequireFinishedSplines(Type component, BaseTool.ToolType type, bool finishesSpline)
+        {
+            var owner = new GameObject("Spline tool switch test");
+            owner.SetActive(false);
+            try
+            {
+                var tool = (BaseTool)owner.AddComponent(component);
+                tool.m_Type = type;
+                Assert.That(SketchSurfacePanel.IsSplineFinishingTool(tool), Is.EqualTo(finishesSpline));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
+        }
+
+        [TestCase(0, true)]
+        [TestCase(1, true)]
+        [TestCase(2, false)]
+        public void SelectCurveKeepsDraftHistoryWhenThereIsNoSavableGeometry(int knotCount, bool allowSelect)
+        {
+            var owner = new GameObject("Spline selection lifecycle test");
+            owner.SetActive(false);
+            try
+            {
+                var tool = owner.AddComponent<FreePaintTool>();
+                const BindingFlags fields = BindingFlags.Instance | BindingFlags.NonPublic;
+                var toolType = typeof(FreePaintTool);
+                var knots = (List<TrTransform>)toolType.GetField("m_SplineKnots", fields).GetValue(tool);
+                for (int i = 0; i < knotCount; i++)
+                    knots.Add(TrTransform.identity);
+                var undo = (Stack<(TrTransform[], bool, bool)>)toolType.GetField("m_SplineDraftUndo", fields)
+                    .GetValue(tool);
+                undo.Push((Array.Empty<TrTransform>(), false, false));
+                toolType.GetField("m_SplineAction", fields).SetValue(tool, FreePaintTool.SplineAction.Draw);
+
+                // Coincident knots have no baked samples. They must leave Draw active when finishing fails.
+                var finish = toolType.GetMethod("TryFinishSplineAndStartAnother", fields);
+                var result = (bool)finish.Invoke(tool, new object[] { true, FreePaintTool.SplineAction.SelectCurve, true });
+                Assert.That(result, Is.EqualTo(allowSelect));
+                Assert.That(tool.IsSplineActionSelected(FreePaintTool.SplineAction.SelectCurve), Is.EqualTo(allowSelect));
+                Assert.That(knots.Count, Is.EqualTo(knotCount));
+                Assert.That(tool.CanUndoSplineDraft, Is.True);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
         }
 
         [Test]

@@ -119,6 +119,7 @@ namespace TiltBrush
             AdminPanelViewOnly = 20302,
             Spline = 20303,
             TransitionSettings = 20304,
+            ModularCoping = 20305,
         }
 
         private enum FixedTransitionState
@@ -508,6 +509,12 @@ namespace TiltBrush
             m_WandAttachYOffset_Initial = m_WandAttachYOffset;
             m_WandAttachAngle_Initial = m_WandAttachAngle;
             m_WandAttachYOffset_Target = m_WandAttachYOffset;
+            m_WandAttachYOffset_Stable = m_WandAttachYOffset;
+        }
+
+        internal void SetInitialWandAttachHeight(float height)
+        {
+            m_WandAttachYOffset_Initial = height;
         }
 
         // Happens at App Start() time.

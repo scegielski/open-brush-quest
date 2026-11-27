@@ -33,22 +33,31 @@ namespace TiltBrush
 
     public class SnapSettingsPanel : BasePanel
     {
+        private const string kShowHeightPreference = "ShowDrawingHeight";
+
         [SerializeField] private TextActionButton m_CalibrationButton;
         [SerializeField] private TextMeshPro m_CalibrationHint;
         [SerializeField] private TextMeshPro m_FloorHeightValue;
         [SerializeField] private ActionButton[] m_FloorHeightButtons;
+        [SerializeField] private TextActionButton m_ShowHeightButton;
 
         private TextMeshPro m_CalibrationLabel;
+        private TextMeshPro m_ShowHeightLabel;
         private (bool Available, bool Active)? m_CalibrationState;
         private int? m_DisplayedFloorHeight;
         private bool? m_FloorHeightAvailable;
+        private bool? m_DisplayedShowHeight;
+
+        public static bool ShowHeight => PlayerPrefs.GetInt(kShowHeightPreference, 1) != 0;
 
         public override void InitPanel()
         {
             base.InitPanel();
             m_CalibrationLabel = m_CalibrationButton.GetComponentInChildren<TextMeshPro>();
+            m_ShowHeightLabel = m_ShowHeightButton.GetComponentInChildren<TextMeshPro>();
             UpdateCalibrationControls();
             UpdateFloorHeight();
+            UpdateShowHeight();
         }
 
         private void Update()
@@ -59,6 +68,25 @@ namespace TiltBrush
 
             UpdateCalibrationControls();
             UpdateFloorHeight();
+            UpdateShowHeight();
+        }
+
+        public void ToggleShowHeight()
+        {
+            PlayerPrefs.SetInt(kShowHeightPreference, ShowHeight ? 0 : 1);
+            PlayerPrefs.Save();
+            UpdateShowHeight();
+        }
+
+        private void UpdateShowHeight()
+        {
+            bool showHeight = ShowHeight;
+            if (m_DisplayedShowHeight == showHeight)
+                return;
+
+            m_ShowHeightButton.SetButtonSelected(showHeight);
+            m_ShowHeightLabel.text = showHeight ? "Show Height: On" : "Show Height: Off";
+            m_DisplayedShowHeight = showHeight;
         }
 
         public void ToggleGridCalibration()

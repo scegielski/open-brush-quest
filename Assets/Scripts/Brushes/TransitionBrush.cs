@@ -7,7 +7,7 @@ using StrokeFlags = TiltBrush.SketchMemoryScript.StrokeFlags;
 
 namespace TiltBrush
 {
-    public sealed class TransitionBrush : GeometryBrush
+    public sealed partial class TransitionBrush : GeometryBrush
     {
         internal enum SweepStyle
         {
@@ -44,6 +44,7 @@ namespace TiltBrush
         private const string kDeckDepthPreference = "TransitionDeckDepthInches";
         private const string kRadiusHalfInchesPreference = "TransitionRadiusHalfInches";
         private const string kDeckDepthHalfInchesPreference = "TransitionDeckDepthHalfInches";
+        private const string kSteelDiameterHalfInchesPreference = "SteelCopingDiameterHalfInches";
         private const string kSweepLeftPreference = "TransitionSweepLeft";
         private const string kOrientationPreference = "TransitionQuarterTurns";
         internal const float UnitsPerInch = 0.0254f * App.METERS_TO_UNITS;
@@ -68,9 +69,13 @@ namespace TiltBrush
         internal const int TubePoints = kTubeSides + 1;
         private const int kCopingFaceEnd = kCopingRampSegments + kNoseSegments;
         private const int kPoolCopingPoints = kCopingFaceEnd + 3;
-        internal const float SteelRadius = UnitsPerInch;
+        internal const float DefaultSteelDiameterInches = 2f;
+        internal const int MinSteelDiameterHalfInches = 1;
+        internal const int MaxSteelDiameterHalfInches = 127;
+        private const int kDefaultSteelDiameterHalfInches = (int)(DefaultSteelDiameterInches * 2f);
+        private const int kSteelDiameterShift = 15;
+        internal const float SteelRadius = DefaultSteelDiameterInches * 0.5f * UnitsPerInch;
         internal const float TileBandWidth = 0.15f * App.METERS_TO_UNITS;
-        private const int kMaxProfilePoints = DeckPoints + WallPoints + TubePoints;
         private const float kMinPositionDelta = 0.0001f;
 
         private readonly List<Knot> m_Stations = new();
@@ -81,6 +86,7 @@ namespace TiltBrush
         internal bool NewStrokeAutoOrient { get; set; }
         internal SurfaceOptions? NewStrokeSurfaceOptions { get; set; }
         internal float? NewStrokeDeckDepthInches { get; set; }
+        internal int NewStrokeSteelDiameterHalfInches { get; set; } = kDefaultSteelDiameterHalfInches;
         internal float? PreviewStartDeckPressure { get; set; }
         internal Quaternion CurrentControllerOrientation { get; set; }
         internal int QuarterTurns => m_StrokeData == null ? NewStrokeQuarterTurns :
@@ -137,7 +143,7 @@ namespace TiltBrush
             ((flags & StrokeFlags.TransitionSweepLeft) != 0 ? 2 : 0) +
             ((flags & StrokeFlags.TransitionSweepQuarterTurn) != 0 ? 1 : 0);
 
-        public TransitionBrush() : base(bCanBatch: true, upperBoundVertsPerKnot: kMaxProfilePoints,
+        public TransitionBrush() : base(bCanBatch: true, upperBoundVertsPerKnot: kSolidMaxRows,
             bDoubleSided: false, bSmoothPositions: false) { }
 
         internal static SweepStyle StyleFor(BrushDescriptor brush) => brush?.m_DurableName switch
@@ -153,6 +159,39 @@ namespace TiltBrush
         };
 
         internal static bool IsTransition(BrushDescriptor brush) => IsTransition(StyleFor(brush));
+
+        internal static bool IsStandaloneSteelCoping(BrushDescriptor brush) => StyleFor(brush) == SweepStyle.SteelCoping;
+
+        internal static bool HasSteelCoping(BrushDescriptor brush, StrokeData stroke = null) =>
+            IsStandaloneSteelCoping(brush) || OptionsFor(brush, stroke).Coping == CopingKind.Steel;
+
+        internal static int SteelDiameterHalfInches
+        {
+            get => ClampSteelDiameter(PlayerPrefs.GetInt(kSteelDiameterHalfInchesPreference, kDefaultSteelDiameterHalfInches));
+            set => PlayerPrefs.SetInt(kSteelDiameterHalfInchesPreference, ClampSteelDiameter(value));
+        }
+
+        internal static float SteelDiameterInches => SteelDiameterHalfInches * 0.5f;
+
+        internal static int ClampSteelDiameter(int halfInches) =>
+            Mathf.Clamp(halfInches, MinSteelDiameterHalfInches, MaxSteelDiameterHalfInches);
+
+        internal static StrokeFlags FlagsWithSteelDiameter(StrokeFlags flags, int halfInches)
+        {
+            halfInches = ClampSteelDiameter(halfInches);
+            var encoded = halfInches == kDefaultSteelDiameterHalfInches
+                ? StrokeFlags.None : (StrokeFlags)(halfInches << kSteelDiameterShift);
+            return (flags & ~StrokeFlags.SteelCopingDiameterMask) | encoded;
+        }
+
+        internal static int SteelDiameterHalfInchesFor(StrokeData stroke)
+        {
+            var flags = stroke?.m_Flags ?? StrokeFlags.None;
+            int encoded = (int)(flags & StrokeFlags.SteelCopingDiameterMask) >> kSteelDiameterShift;
+            return encoded == 0 ? kDefaultSteelDiameterHalfInches : encoded;
+        }
+
+        internal static float SteelDiameterInchesFor(StrokeData stroke) => SteelDiameterHalfInchesFor(stroke) * 0.5f;
 
         private static bool IsTransition(SweepStyle style) =>
             style is SweepStyle.PoolTransition or SweepStyle.UntiledPoolTransition
@@ -285,6 +324,8 @@ namespace TiltBrush
                 m_StraightLength = Mathf.Max(0f, m_JoinHeight - radius);
             }
 
+            internal float Radius => m_Radius;
+
             private static float ArcAngle(float height, float radius) =>
                 Mathf.Acos(Mathf.Clamp01(1f - height / radius));
 
@@ -380,34 +421,14 @@ namespace TiltBrush
             new Vector2(Mathf.Sin((row % kTubeSides) * (2f * Mathf.PI / kTubeSides)) * radius,
                 Mathf.Cos((row % kTubeSides) * (2f * Mathf.PI / kTubeSides)) * radius);
 
-        internal static int PreviewPointCount(SurfaceOptions options, float deckDepth)
-        {
-            if (options.Coping == CopingKind.Pool)
-                return options.Deck ? ProfilePoints : ProfilePoints - DeckPoints;
-            int deck = options.Deck && deckDepth > 0f ? DeckPoints : 0;
-            return deck + WallPoints + (options.Coping == CopingKind.Steel ? TubePoints : 0);
-        }
+        internal static int PreviewPointCount(SurfaceOptions options, float deckDepth) =>
+            BodyPointCount(options.Coping == CopingKind.Pool) + 1;
 
         internal static Vector2 PreviewPoint(SurfaceOptions options, SurfaceProfile profile, int row, float height,
-            float scale, float deckDepth)
+            float scale, float deckDepth, float steelDiameterInches = DefaultSteelDiameterInches)
         {
-            if (options.Coping == CopingKind.Pool)
-                return profile.Sample(options.Deck ? row : row + DeckPoints, out _);
-            bool steel = options.Coping == CopingKind.Steel;
-            float tubeRadius = steel ? SteelRadius * scale : 0f;
-            if (options.Deck && deckDepth > 0f)
-            {
-                if (row < DeckPoints)
-                    return new Vector2(-tubeRadius - (row == 0 ? deckDepth : 0f), height - tubeRadius);
-                row -= DeckPoints;
-            }
-            if (steel)
-            {
-                if (row < TubePoints)
-                    return SteelProfilePoint(row, tubeRadius) + Vector2.up * (height - tubeRadius);
-                row -= TubePoints;
-            }
-            return profile.Sample(WallStart + row, out _);
+            float tubeRadius = options.Coping == CopingKind.Steel ? steelDiameterInches * 0.5f * UnitsPerInch * scale : 0f;
+            return MakeBodyProfile(options, height, profile.Radius, deckDepth, tubeRadius, scale).Sample(row, out _);
         }
 
         internal static Vector3 Across(Vector3 heading, int turns)
@@ -424,220 +445,131 @@ namespace TiltBrush
 
         protected override void ControlPointsChanged(int firstChanged)
         {
-            bool transition = IsTransition(m_Style);
-            float floorHeight = transition && App.Instance != null ? App.Scene.FloorHeightCanvasUnits : 0f;
-            StrokeFlags flags = m_StrokeData?.m_Flags ?? StrokeFlags.None;
-            SurfaceOptions options = transition ? (m_StrokeData == null
-                ? NewStrokeSurfaceOptions ?? OptionsFor(m_Style) : OptionsFor(m_Style, flags)) : default;
-            bool pool = options.Coping == CopingKind.Pool;
-            bool steelWall = options.Coping == CopingKind.Steel;
-            bool standaloneSteel = m_Style == SweepStyle.SteelCoping;
-            bool standaloneCoping = m_Style == SweepStyle.PoolCoping;
-            bool standaloneTile = m_Style == SweepStyle.PoolTile;
-            bool variableDeck = options.Deck &&
-                (PreviewStartDeckPressure.HasValue || (m_StrokeData != null && HasVariableDeck(m_StrokeData)));
-            int presetDepth = (flags & StrokeFlags.TransitionSurfaceOverride) != 0
-                ? DefaultDeckDepthInches : LegacyDeckDepth(m_Style);
-            float defaultDepth = NewStrokeDeckDepthInches ?? presetDepth;
-            bool deck = options.Deck && (pool || variableDeck || defaultDepth > 0f);
-            int copingStart = deck ? DeckPoints : 0;
-            int wallStart = transition ? copingStart + (pool ? WallStart - DeckPoints : 0) : -1;
-            int tubeStart = steelWall ? wallStart + WallPoints : standaloneSteel ? 0 : -1;
-            int rowCount = transition ? (steelWall ? tubeStart + TubePoints : wallStart + WallPoints) : m_Style switch
+            m_geometry.m_Tris.SetCount(0);
+            m_geometry.NumVerts = 0;
+            float radius = BaseSize_LS;
+            if (m_knots.Count < 2 || !float.IsFinite(radius) || radius <= 0f)
             {
-                SweepStyle.PoolCoping => kPoolCopingPoints,
-                SweepStyle.SteelCoping => TubePoints,
-                SweepStyle.PoolTile => 2,
-                _ => WallPoints
-            };
+                m_Stations.Clear();
+                return;
+            }
+
+            if (IsTransition(m_Style))
+            {
+                float floor = App.Instance != null ? App.Scene.FloorHeightCanvasUnits : 0f;
+                var options = m_StrokeData == null ? NewStrokeSurfaceOptions ?? OptionsFor(m_Style) :
+                    OptionsFor(m_Style, m_StrokeData.m_Flags);
+                BuildSolidTransition(floor, options, radius);
+            }
+            else
+            {
+                BuildStandaloneSweep();
+            }
+        }
+
+        private void CollectStations(int rowCount, int reserve, bool allowVertical)
+        {
             m_Stations.Clear();
-            int maxStations = 65000 / rowCount;
+            int maxStations = (65000 - reserve) / rowCount;
             int step = Mathf.Max(1, Mathf.CeilToInt((m_knots.Count - 1f) / (maxStations - 1)));
-            bool allowVertical = wallStart < 0;
             for (int i = 0; i < m_knots.Count; i += step)
                 AddStation(m_knots[i], allowVertical);
             if ((m_knots.Count - 1) % step != 0)
                 AddStation(m_knots[m_knots.Count - 1], allowVertical);
+        }
 
-            int count = m_Stations.Count;
-            float radius = BaseSize_LS;
-            m_geometry.m_Tris.SetCount(0);
-            if (count < 2 || !float.IsFinite(radius) || radius <= 0f)
+        private void BuildStandaloneSweep()
+        {
+            bool steel = m_Style == SweepStyle.SteelCoping;
+            int rows = m_Style switch
             {
-                m_geometry.NumVerts = 0;
+                SweepStyle.PoolCoping => kPoolCopingPoints,
+                SweepStyle.SteelCoping => TubePoints,
+                SweepStyle.PoolTile => 2,
+                _ => 0
+            };
+            if (rows == 0)
                 return;
-            }
 
-            m_geometry.NumVerts = count * rowCount;
-            bool autoOrient = AutoOrient;
-            int turns = autoOrient ? QuarterTurns & 2 : QuarterTurns;
-            Quaternion? orientation = StrokeOrientation;
-            bool tracksController = !autoOrient && TracksController;
-            bool hasOffsets = !autoOrient && m_StrokeData != null && HasHeadingOffsets(m_StrokeData);
-            Vector3? fixedHeading = !autoOrient && orientation.HasValue ? HorizontalHeading(orientation.Value) : null;
-            bool reverseWinding = turns >= 2;
-            bool closed = count > 3 && (m_Stations[0].point.m_Pos -
-                m_Stations[count - 1].point.m_Pos).sqrMagnitude < kMinPositionDelta * kMinPositionDelta;
-            if (closed && (tracksController || hasOffsets))
-                closed = Quaternion.Angle(m_Stations[0].point.m_Orient, m_Stations[count - 1].point.m_Orient) < 0.1f;
+            CollectStations(rows, reserve: 0, allowVertical: true);
+            int count = m_Stations.Count;
+            if (count < 2)
+                return;
+
+            m_geometry.NumVerts = count * rows;
+            bool closed = GetSolidSweepClosed();
             m_ClosedSweep = closed;
-            var vertices = m_geometry.m_Vertices;
-            float totalDistance = 0f;
-            for (int station = 1; station < count; station++)
-                totalDistance += Vector3.Distance(m_Stations[station].point.m_Pos, m_Stations[station - 1].point.m_Pos);
 
-            // Double the previous whole-tile count on loops so the seam stays aligned.
+            float totalDistance = 0f;
+            for (int i = 1; i < count; i++)
+                totalDistance += Vector3.Distance(m_Stations[i].point.m_Pos, m_Stations[i - 1].point.m_Pos);
             float repeatsPerUnit = closed
-                ? 2f * Mathf.Max(1, Mathf.RoundToInt(totalDistance / (2f * kConcreteRepeat))) / totalDistance
-                : 1f / kConcreteRepeat;
+                ? 2f * Mathf.Max(1, Mathf.RoundToInt(totalDistance / (2f * kConcreteRepeat))) / totalDistance : 1f / kConcreteRepeat;
             float distance = 0f;
             float widthScale = POINTER_TO_LOCAL;
+            float steelDiameter = m_StrokeData == null
+                ? NewStrokeSteelDiameterHalfInches * 0.5f : SteelDiameterInchesFor(m_StrokeData);
+            float tubeRadius = steelDiameter * 0.5f * UnitsPerInch * widthScale;
+            var vertices = m_geometry.m_Vertices;
             for (int station = 0; station < count; station++)
             {
-                Vector3 coping = m_Stations[station].point.m_Pos;
+                Vector3 center = m_Stations[station].point.m_Pos;
                 if (station > 0)
-                    distance += Vector3.Distance(coping, m_Stations[station - 1].point.m_Pos);
-                Vector3 heading = GetStationHeading(station, tracksController, hasOffsets, fixedHeading);
-                Vector3 across = Across(heading, turns);
-                Vector3 frameUp = Vector3.up;
-                Vector3 frameRight = across;
-                if (tubeStart >= 0 || allowVertical)
-                {
-                    Vector3 path = StationTangent(station, closed, horizontal: false);
-                    frameUp = Vector3.ProjectOnPlane(Vector3.up, path);
-                    if (frameUp.sqrMagnitude < 0.0001f)
-                        frameUp = Vector3.ProjectOnPlane(Vector3.forward, path);
-                    frameUp.Normalize();
-                    frameRight = Vector3.Cross(frameUp, path).normalized;
-                }
-                float depthInches = defaultDepth;
-                if (variableDeck)
-                {
-                    // GeometryBrush takes the first moving sample's pressure for the initial knot.
-                    float pressure = station == 0
-                        ? PreviewStartDeckPressure ?? m_StrokeData.m_ControlPoints[0].m_Pressure
-                        : m_Stations[station].point.m_Pressure;
-                    depthInches = DecodeDeckDepth(pressure);
-                }
-                float deckDepth = depthInches * UnitsPerInch * widthScale;
-                // If the floor rises above the coping, collapse the wall at the authored point.
-                float profileFloor = Mathf.Min(coping.y, floorHeight);
-                Vector3 floorOffset = Vector3.up * profileFloor;
-                var profile = new SurfaceProfile(coping.y - profileFloor, radius, deckDepth, pool);
-                int first = station * rowCount;
-                for (int row = 0; row < rowCount; row++)
+                    distance += Vector3.Distance(center, m_Stations[station - 1].point.m_Pos);
+                MakeTubeFrame(StationTangent(station, closed, horizontal: false), out var right, out var up);
+                int first = station * rows;
+                for (int row = 0; row < rows; row++)
                 {
                     float profileDistance;
-                    Vector3 surface = Vector3.zero;
-                    if (tubeStart >= 0 && row >= tubeStart)
+                    Vector2 point;
+                    if (steel)
                     {
-                        int ring = row - tubeStart;
-                        float tubeRadius = SteelRadius * widthScale;
-                        Vector2 point = SteelProfilePoint(ring, tubeRadius);
-                        // The transition's drawn line stays at the top of the pipe.
-                        float topOffset = steelWall ? tubeRadius : 0f;
-                        vertices[first + row] = coping + frameRight * point.x + frameUp * (point.y - topOffset);
-                        profileDistance = ring * (2f * Mathf.PI / kTubeSides) * tubeRadius;
-                        surface = Vector3.forward;
+                        point = SteelProfilePoint(row, tubeRadius);
+                        profileDistance = row * (2f * Mathf.PI / kTubeSides) * tubeRadius;
                     }
-                    else if (deck && row < copingStart)
+                    else if (m_Style == SweepStyle.PoolCoping)
                     {
-                        if (pool)
-                        {
-                            vertices[first + row] = profile.Vertex(coping, across, row, out profileDistance) + floorOffset;
-                        }
-                        else
-                        {
-                            Vector3 deckEdge = coping;
-                            if (steelWall)
-                            {
-                                float side = Vector3.Dot(across, frameRight) < 0f ? -1f : 1f;
-                                deckEdge -= SteelRadius * widthScale * (frameUp + frameRight * side);
-                            }
-                            profileDistance = row == 0 ? -deckDepth : 0f;
-                            vertices[first + row] = deckEdge + across * profileDistance;
-                        }
-                        surface = Vector3.right;
-                    }
-                    else if (standaloneCoping)
-                    {
-                        Vector2 point = StandaloneCopingPoint(row, out profileDistance) * widthScale;
+                        point = StandaloneCopingPoint(row, out profileDistance) * widthScale;
                         profileDistance *= widthScale;
-                        vertices[first + row] = coping + frameRight * point.x + frameUp * point.y;
-                    }
-                    else if (standaloneTile)
-                    {
-                        profileDistance = row * TileBandWidth * widthScale;
-                        vertices[first + row] = coping - frameUp * profileDistance;
-                        // Keep all three rows even when the painted strip has been scaled.
-                        profileDistance = row * TileBandWidth;
                     }
                     else
                     {
-                        vertices[first + row] = profile.Vertex(coping, across, WallStart + row - wallStart,
-                            out profileDistance) + floorOffset;
-                        if (!options.Tile)
-                            surface = Vector3.up;
+                        profileDistance = row * TileBandWidth;
+                        point = Vector2.down * (profileDistance * widthScale);
                     }
+                    vertices[first + row] = center + right * point.x + up * point.y;
                     SetUv0(first, row, new Vector2(distance * repeatsPerUnit, profileDistance / kConcreteRepeat));
-                    SetUv1(first, row, surface);
+                    SetUv1(first, row, steel ? Vector3.forward : Vector3.zero);
                 }
             }
 
             for (int station = 0; station < count; station++)
             {
-                int first = station * rowCount;
+                int first = station * rows;
                 int previous = station > 0 ? station - 1 : (closed ? count - 2 : 0);
                 int next = station < count - 1 ? station + 1 : (closed ? 1 : station);
-                bool collapsedJoin = wallStart >= 0 && vertices[first + wallStart] == vertices[first + wallStart + 1];
-                for (int row = 0; row < rowCount; row++)
+                for (int row = 0; row < rows; row++)
                 {
-                    Vector3 along = vertices[next * rowCount + row] - vertices[previous * rowCount + row];
-                    bool tube = tubeStart >= 0 && row >= tubeStart;
-                    bool reverse = !tube && !allowVertical && reverseWinding;
+                    Vector3 along = vertices[next * rows + row] - vertices[previous * rows + row];
                     int upper = Mathf.Max(0, row - 1);
-                    int lower = Mathf.Min(rowCount - 1, row + 1);
-                    if (tube && (row == tubeStart || row == rowCount - 1))
+                    int lower = Mathf.Min(rows - 1, row + 1);
+                    if (steel && (row == 0 || row == rows - 1))
                     {
-                        upper = rowCount - 2;
-                        lower = tubeStart + 1;
+                        upper = rows - 2;
+                        lower = 1;
                     }
-                    if (steelWall && row == tubeStart - 1)
-                        lower = row;
-                    // The deck and coping share an edge with separate material coordinates.
-                    if (deck && row == copingStart - 1)
-                        lower = pool ? lower + 1 : row;
-                    if (deck && row == copingStart)
-                        upper = pool ? upper - 1 : row;
-                    // The join and first arc vertex coincide when there is no vertical face.
-                    if (collapsedJoin && row == wallStart)
-                        lower++;
-                    if (collapsedJoin && row == wallStart + 1 && pool)
-                        upper--;
                     Vector3 down = vertices[first + lower] - vertices[first + upper];
-                    Vector3 normal = (reverse ? Vector3.Cross(down, along) : Vector3.Cross(along, down)).normalized;
+                    Vector3 normal = Vector3.Cross(along, down).normalized;
                     if (normal == Vector3.zero)
                         normal = Vector3.up;
                     SetVert(first, row, vertices[first + row], normal, m_Stations[station].color, 1f);
                     Vector3 tangent = Vector3.ProjectOnPlane(along, normal);
                     if (tangent.sqrMagnitude < 1e-10f)
                         tangent = Vector3.Cross(normal, Mathf.Abs(normal.z) < 0.9f ? Vector3.forward : Vector3.right);
-                    float tangentSign = Vector3.Dot(Vector3.Cross(normal, tangent), down) < 0f ? -1f : 1f;
-                    SetTangent(first, row, tangent, tangentSign);
-                    if (station == count - 1 || row == rowCount - 1 ||
-                        (deck && row == copingStart - 1) || (steelWall && row == tubeStart - 1))
-                        continue;
-                    // The last ring has the same positions as the first ring of a loop, with its own UVs.
-                    int nextFirst = first + rowCount;
-                    int top = first + row;
-                    int nextTop = nextFirst + row;
-                    // Weld each collapsed top row to its arc.
-                    if (row == wallStart && collapsedJoin)
-                        top++;
-                    if (row == wallStart && vertices[nextTop] == vertices[nextTop + 1])
-                        nextTop++;
-                    AddTriangle(top, nextTop, first + row + 1, reverse);
-                    AddTriangle(first + row + 1, nextTop, nextFirst + row + 1, reverse);
+                    float sign = Vector3.Dot(Vector3.Cross(normal, tangent), down) < 0f ? -1f : 1f;
+                    SetTangent(first, row, tangent, sign);
+                    if (station < count - 1 && row < rows - 1)
+                        AddSolidQuad(first + row, first + rows + row, reverse: false);
                 }
             }
             if (m_geometry.m_Tris.Count == 0)
@@ -679,28 +611,6 @@ namespace TiltBrush
                 return HorizontalHeading(orientation);
             Vector3 heading = fixedHeading ?? StationTangent(station, m_ClosedSweep);
             return hasOffsets ? orientation * heading : heading;
-        }
-
-        internal Vector3 GetHeadingNear(Vector3 position)
-        {
-            if (m_Stations.Count < 2)
-                return Vector3.zero;
-            int nearest = 0;
-            float nearestDistance = float.PositiveInfinity;
-            for (int i = 0; i < m_Stations.Count; i++)
-            {
-                float distance = (m_Stations[i].point.m_Pos - position).sqrMagnitude;
-                if (distance < nearestDistance)
-                {
-                    nearest = i;
-                    nearestDistance = distance;
-                }
-            }
-            if (AutoOrient)
-                return StationTangent(nearest, m_ClosedSweep);
-            Vector3? fixedHeading = StrokeOrientation is Quaternion orientation ? HorizontalHeading(orientation) : null;
-            return GetStationHeading(nearest, TracksController, m_StrokeData != null && HasHeadingOffsets(m_StrokeData),
-                fixedHeading);
         }
 
         private static Vector3 Horizontal(Vector3 vector) => new Vector3(vector.x, 0, vector.z);

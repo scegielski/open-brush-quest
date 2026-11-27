@@ -203,6 +203,27 @@ namespace TiltBrush
             m_RotateSnapState = RotateSnapState.Snapping;
         }
 
+        internal bool TryFocusWandPanel(BasePanel.PanelType type)
+        {
+            if (m_AdvancedModeRevealActive || !GazePanelsAreVisible() || !StandardActive())
+            {
+                return false;
+            }
+
+            PanelData panel = m_AllPanels.Find(p => p.m_Panel.Type == type &&
+                p.m_Panel.m_Fixed && p.AvailableInCurrentMode);
+            if (panel == null)
+            {
+                return false;
+            }
+
+            float angle = Mathf.DeltaAngle(m_WandPanelsOriginAngle, -panel.m_Panel.m_WandAttachAngle);
+            m_WandPanelsRotationVelocity = 0.0f;
+            m_RotateSnapState = RotateSnapState.Done;
+            UpdateWandPanelsOriginAngle(angle);
+            return true;
+        }
+
         public class RevealParticle
         {
             public Transform xf;
@@ -507,7 +528,8 @@ namespace TiltBrush
                 type == BasePanel.PanelType.Sketchbook || type == BasePanel.PanelType.SketchbookMobile ||
                 type == BasePanel.PanelType.Camera || type == BasePanel.PanelType.MemoryWarning ||
                 type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary ||
-                type == BasePanel.PanelType.Spline || type == BasePanel.PanelType.TransitionSettings;
+                type == BasePanel.PanelType.Spline || type == BasePanel.PanelType.TransitionSettings ||
+                type == BasePanel.PanelType.ModularCoping;
         }
 
         // Core panels are those that exist in the basic mode experience.  Practically, those that
@@ -675,6 +697,8 @@ namespace TiltBrush
                     p.m_Fixed = p.BeginFixed;
                     // Use defaults for the rest of the attributes.
                 }
+                if (App.Config.IsMobileHardware)
+                    AlignMobileCarouselPanel(p);
 
                 // Package this panel up with metadata.
                 PanelData newData = new PanelData();
@@ -747,6 +771,19 @@ namespace TiltBrush
                     grabWidget.enabled = true;
                 }
             }
+        }
+
+        internal static void AlignMobileCarouselPanel(BasePanel panel)
+        {
+            if (panel.Type is not (BasePanel.PanelType.Color or BasePanel.PanelType.Brush or BasePanel.PanelType.BrushMobile or
+                BasePanel.PanelType.ToolsBasic or BasePanel.PanelType.ToolsAdvanced))
+                return;
+
+            // An older saved dock can put two main panels on the same face or at different heights.
+            // Floating panels keep their saved poses and use the aligned layout when reset.
+            panel.SetInitialWandAttachHeight(0f);
+            if (panel.m_Fixed)
+                panel.ResetPanelToInitialPosition();
         }
 
         public void ResetPanel(int index)

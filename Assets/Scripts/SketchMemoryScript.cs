@@ -80,6 +80,11 @@ namespace TiltBrush
             TransitionTile = 1 << 11,
             TransitionDeck = 1 << 12,
             SplineAutoOrient = 1 << 13,
+            ModularCopingConvex = 1 << 14,
+            // Seven bits store steel coping diameter in half inches. Zero indicates a legacy 2-inch tube.
+            SteelCopingDiameterMask = 0x7f << 15,
+            // Zero marks a full-length piece from before the length control was introduced.
+            ModularCopingLengthMask = 0x7f << 24,
         }
 
         // NOTE: making this generic is way more trouble than it's worth

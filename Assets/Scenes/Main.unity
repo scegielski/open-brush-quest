@@ -26273,7 +26273,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 141494, guid: 0053ac08708148641bd0b629e8e3e2e5, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26297,7 +26297,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 176644, guid: 898df100b7777cd40b9e51b8df90ddfd, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26305,7 +26305,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 1770738498669030, guid: 657b9653200e3f64ca3fd359d83c79cf, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26321,7 +26321,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 141494, guid: a71be6f60d7230c46b3f4c851f6f5933, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26361,7 +26361,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 1272310558547734, guid: 6f8d5fd33c3621841bfcab343300ec72, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26401,7 +26401,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 1513704753240124, guid: 16a494a2ae54cba4d94ef4c0515bdaee, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26465,7 +26465,7 @@ MonoBehaviour:
   - m_PanelPrefab: {fileID: 176644, guid: d620d9effac3e6c4eaae746d85edf13c, type: 3}
     m_ModeVr: 1
     m_ModeMono: 1
-    m_ModeQuest: 1
+    m_ModeQuest: 0
     m_Basic: 0
     m_Advanced: 1
     m_ViewOnly: 0
@@ -26511,6 +26511,14 @@ MonoBehaviour:
     m_ViewOnly: 0
     m_Multiplayer: 0
   - m_PanelPrefab: {fileID: 199434, guid: 80028b226d76402ca4f03b544ef1dc86, type: 3}
+    m_ModeVr: 1
+    m_ModeMono: 0
+    m_ModeQuest: 1
+    m_Basic: 1
+    m_Advanced: 1
+    m_ViewOnly: 0
+    m_Multiplayer: 0
+  - m_PanelPrefab: {fileID: 199434, guid: 29b28f697b0d4ff6a9467d05d81dcc14, type: 3}
     m_ModeVr: 1
     m_ModeMono: 0
     m_ModeQuest: 1

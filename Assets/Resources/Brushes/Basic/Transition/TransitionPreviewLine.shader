@@ -6,6 +6,7 @@ Shader "Custom/TransitionPreviewLine"
     Properties
     {
         _Color ("Color", Color) = (0.16, 0.72, 0.86, 1)
+        _Dashed ("Dashed", Float) = 1
     }
 
     SubShader
@@ -27,6 +28,7 @@ Shader "Custom/TransitionPreviewLine"
 
             CBUFFER_START(UnityPerMaterial)
             half4 _Color;
+            half _Dashed;
             CBUFFER_END
 
             struct Attributes
@@ -58,7 +60,7 @@ Shader "Custom/TransitionPreviewLine"
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
                 float dashDistance = abs(frac(input.dashCoordinate + 0.5) - 0.5);
                 float edge = clamp(fwidth(input.dashCoordinate), 0.001, 0.15);
-                half alpha = (1.0 - smoothstep(0.30 - edge, 0.30 + edge, dashDistance)) * _Color.a;
+                half alpha = (1.0 - _Dashed * smoothstep(0.30 - edge, 0.30 + edge, dashDistance)) * _Color.a;
                 return half4(_Color.rgb * alpha, alpha);
             }
             ENDHLSL

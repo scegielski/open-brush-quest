@@ -9,14 +9,19 @@ namespace TiltBrush
 {
     public partial class FreePaintTool
     {
-        internal enum SplineAction { MoveAndRotate, Append, Insert, Delete, DeckDepth, ToggleLoop, NewSpline, ToggleAutoOrient }
+        internal enum SplineAction
+        {
+            MoveAndRotate, Append, Insert, Delete, DeckDepth, ToggleLoop, NewSpline, ToggleAutoOrient, SelectCurve, Draw
+        }
 
         internal struct TransitionSettings
         {
             internal int RadiusHalfInches;
             internal int DeckDepthHalfInches;
+            internal int SteelDiameterHalfInches;
             internal bool MixedDeckDepth;
             internal bool IsSelection;
+            internal bool IsStandaloneSteel;
             internal TransitionBrush.SurfaceOptions Options;
         }
 
@@ -25,18 +30,25 @@ namespace TiltBrush
         private const float kSplineHandleGrabRadius = 0.16f;
         private const float kSplineHullWidth = 0.009f;
         private const float kSplineMinimumSpacing = 0.011f;
+        private const float kSplineSelectReach = 12f * App.METERS_TO_UNITS;
+        private const float kSplineSelectRayWidth = 0.0045f * App.METERS_TO_UNITS;
+        private static readonly Color kSplineSelectRayColor = new(0.08f, 0.86f, 1f);
+        private static readonly Color kSplineSelectHitColor = new(1f, 0.8f, 0.15f);
 
         // For Transition, scale holds the deck depth relative to the default depth (1).
         private readonly List<TrTransform> m_SplineKnots = new();
         private readonly List<TrTransform> m_SplineSamples = new();
         private readonly List<PointerManager.ControlPoint> m_SplineStrokePoints = new();
         private readonly List<Transform> m_SplineHandles = new();
+        private readonly SplineStrokePicker m_SplineStrokePicker = new();
         private readonly Stack<(TrTransform[] Knots, bool Closed, bool AutoOrient)> m_SplineDraftUndo = new();
         private readonly Stack<(TrTransform[] Knots, bool Closed, bool AutoOrient)> m_SplineDraftRedo = new();
         private CanvasScript m_SplineCanvas;
         private SketchMemoryScript m_SplineMemory;
         private GameObject m_SplinePreview;
         private LineRenderer m_SplineHull;
+        private LineRenderer m_SplineSelectRay;
+        private Material m_SplineSelectRayMaterial;
         private Material m_SplineHullMaterial;
         private bool m_SplinePreviewDirty;
         private BaseBrushScript m_DraftSplinePreviewBrush;
@@ -55,6 +67,8 @@ namespace TiltBrush
         private int m_DraggedSplineKnot = -1;
         private int m_HoveredSplineKnot = -1;
         private Vector3 m_SplineDragOffset;
+        private Vector3 m_SplineMoveAtGrab;
+        private bool m_SplineMoveStarted;
         private Quaternion m_SplineControllerAtGrab;
         private Quaternion m_SplineKnotAtGrab;
         private float m_DeckDepthAtGrab;
@@ -63,7 +77,6 @@ namespace TiltBrush
         private (TrTransform[] Knots, bool Closed, bool AutoOrient)? m_SplineDraftBeforeEdit;
         private bool m_SplineClosed;
         private bool m_DraftSplineAutoOrient;
-        private bool m_StartNewSpline;
         private Stroke m_EditableSpline;
         private StrokeData m_SplineHeadingEditData;
         private BrushDescriptor m_SplineEditBrush;
@@ -116,25 +129,32 @@ namespace TiltBrush
             // Temporarily suspend the draft while another input mode owns the pointer.
             if (!UsesSplinePreview)
             {
+                ExitModularCoping();
                 SetSplinePreviewVisible(false);
                 HideTransitionSettingsPanel();
+                if (ModularCopingBrush.IsModular(SplineBrush))
+                {
+                    m_PaintingActive = false;
+                    PointerManager.m_Instance.EnableLine(false);
+                    return true;
+                }
                 return false;
             }
 
-            if (m_SplineCanvas != null && m_SplineCanvas != App.ActiveCanvas)
-            {
-                bool hadDraft = m_EditableSpline == null && m_SplineKnots.Count > 0;
-                if (m_EditableSpline != null)
-                    ReleaseSplineKnot();
-                ClearSplineDraft();
-                if (hadDraft)
-                    ShowSplineHint("Spline canceled: drawing layer changed");
-            }
+            ClearSplineOnCanvasChange();
 
             m_PaintingActive = false;
             PointerManager.m_Instance.EnableLine(false);
             if (m_BimanualTape)
                 EndBimanualTape();
+            if (UsesModularCoping)
+            {
+                SetSplinePreviewVisible(false);
+                HideTransitionSettingsPanel();
+                UpdateModularCopingPlacement(canDraw);
+                return true;
+            }
+            ExitModularCoping();
             if (!canDraw || App.ActiveCanvas == null)
             {
                 PauseSplineInput();
@@ -152,12 +172,19 @@ namespace TiltBrush
             if (UpdateSplinePanelShortcut())
                 return true;
 
-            (Vector3 worldPosition, Quaternion worldRotation) = GetPointerPosition();
             var worldFromCanvas = m_SplineCanvas.Pose;
+            if (m_SplineAction == SplineAction.SelectCurve)
+            {
+                UpdateSplineSelection();
+                return true;
+            }
+            if (m_SplineSelectRay != null)
+                m_SplineSelectRay.enabled = false;
+            (Vector3 worldPosition, Quaternion worldRotation) = GetPointerPosition();
             var cursor = worldFromCanvas.inverse * TrTransform.TR(worldPosition, worldRotation);
             Quaternion controllerRotation = cursor.rotation;
             float pickRadius = kSplinePickRadius / worldFromCanvas.scale;
-            int highlighted = EditSplineAtCursor(cursor, pickRadius, kSplineHandleGrabRadius / worldFromCanvas.scale);
+            int highlighted = UpdateSplineActionAtCursor(cursor, pickRadius, kSplineHandleGrabRadius / worldFromCanvas.scale);
             MoveSplineKnot(cursor, controllerRotation);
             var pointerPose = worldFromCanvas *
                 (m_DraggedSplineKnot >= 0 ? m_SplineKnots[m_DraggedSplineKnot] : SnapSplineKnot(cursor));
@@ -183,34 +210,93 @@ namespace TiltBrush
             m_SplineMemory.SketchClearing += OnSplineSketchClearing;
         }
 
-        internal void FinishSplineForBrushChange()
+        private void ClearSplineOnCanvasChange()
         {
-            if (!UsesSplinePreview || m_SplineCanvas == null || m_SplineCanvas != App.ActiveCanvas ||
-                !App.Instance.IsInStateThatAllowsPainting())
+            if (m_SplineCanvas == null || m_SplineCanvas == App.ActiveCanvas)
                 return;
 
-            if (m_EditableSpline != null || OwnsSplineDraftHistory)
-                FinishSplineAndStartAnother(keepTransitionSettings: false);
-            else
-                m_DraftSplineSurfaceOptions = null;
+            CancelModularCopingPlacement();
+            bool hadDraft = m_EditableSpline == null && m_SplineKnots.Count > 0;
+            if (m_EditableSpline != null)
+                ReleaseSplineKnot();
+            ClearSplineDraft();
+            if (hadDraft)
+                ShowSplineHint("Spline canceled: drawing layer changed");
         }
 
-        private void FinishSplineAndStartAnother(bool keepTransitionSettings)
+        internal void StartDrawing()
+        {
+            EatInput();
+            if (!UsesSplinePreview || App.ActiveCanvas == null)
+                return;
+
+            ClearSplineOnCanvasChange();
+            if (m_SplineCanvas == null && !UsesModularCoping)
+                BeginSplineDraft();
+            ChooseSplineAction(SplineAction.Draw);
+        }
+
+        internal bool TryFinishSplineForBrushChange(BrushDescriptor paletteBrush = null)
+        {
+            if (App.Instance == null || !App.Instance.IsInStateThatAllowsPainting() || !UsesSplinePreview)
+                return true;
+
+            bool fromPalette = paletteBrush != null;
+            bool drawNext = m_SplineAction == SplineAction.Draw &&
+                (!fromPalette || !ModularCopingBrush.IsModular(paletteBrush));
+            var nextAction = drawNext ? SplineAction.Draw : SplineAction.MoveAndRotate;
+            if (m_SplineCanvas != null && m_SplineCanvas == App.ActiveCanvas)
+            {
+                if (m_EditableSpline != null || OwnsSplineDraftHistory)
+                    return TryFinishSplineAndStartAnother(keepTransitionSettings: false, nextAction: nextAction);
+                m_DraftSplineSurfaceOptions = null;
+                if (fromPalette)
+                    PauseSplineInput();
+            }
+
+            if (fromPalette)
+            {
+                EatInput();
+                m_SplineAction = nextAction;
+            }
+            return true;
+        }
+
+        internal bool TryFinishSplineForStrokeTool()
+        {
+            if (m_SplineCanvas == null || m_SplineCanvas != App.ActiveCanvas || !UsesSplinePreview ||
+                !App.Instance.IsInStateThatAllowsPainting())
+                return true;
+
+            return TryFinishSplineAndStartAnother(keepTransitionSettings: true,
+                nextAction: m_SplineAction == SplineAction.Draw ? SplineAction.Draw : SplineAction.MoveAndRotate,
+                completeDraftOnly: true);
+        }
+
+        private bool TryFinishSplineAndStartAnother(bool keepTransitionSettings, SplineAction nextAction,
+            bool completeDraftOnly = false)
         {
             RefreshEditableSpline();
             PauseSplineInput();
             EatInput();
-            if (m_EditableSpline == null && m_SplineKnots.Count >= 2 && !CommitSpline())
+            bool hasCompleteDraft = m_EditableSpline == null && m_SplineKnots.Count >= 2;
+            if (hasCompleteDraft && !CommitSpline())
             {
                 ShowSplineHint("Separate overlapping points before finishing");
-                return;
+                return false;
+            }
+            if (completeDraftOnly && !hasCompleteDraft)
+            {
+                m_SplineAction = nextAction;
+                return true;
             }
 
             var options = keepTransitionSettings ? m_DraftSplineSurfaceOptions : null;
             ClearSplineDraft();
             BeginSplineDraft();
             m_DraftSplineSurfaceOptions = options;
-            m_StartNewSpline = true;
+            m_SplineAction = nextAction;
+            return true;
         }
 
         private void PlaceSplineKnot(TrTransform cursor)
@@ -235,13 +321,11 @@ namespace TiltBrush
             if (TransitionBrush.IsTransition(SplineBrush))
                 cursor.scale = m_DraftSplineStartingDeckDepth / TransitionBrush.DefaultDeckDepthInches;
             if (SplineTracksTransitionHeading)
-                cursor.rotation = SplineAutoOrientEnabled ? SampleTransitionOrientation(m_SplineCanvas, controllerRotation) :
-                    CaptureTransitionOrientation(m_SplineCanvas, controllerRotation);
+                cursor.rotation = SnapTransitionAngle(TransitionBrush.HorizontalOrientation(controllerRotation), m_SplineCanvas);
 
             BeginSplineKnotEdit();
             m_DraggedSplineKnot = m_SplineKnots.Count;
             m_SplineTopologyIndex = m_DraggedSplineKnot;
-            m_StartNewSpline = false;
             m_SplineDragOffset = Vector3.zero;
             AddSplineKnot(cursor);
             SampleSpline();
@@ -299,7 +383,7 @@ namespace TiltBrush
             return nearest;
         }
 
-        private int EditSplineAtCursor(TrTransform cursor, float radius, float handleRadius)
+        private int UpdateSplineActionAtCursor(TrTransform cursor, float radius, float handleRadius)
         {
             int nearest = m_SplineAction switch
             {
@@ -317,21 +401,20 @@ namespace TiltBrush
                     BeginSplineKnotEdit();
                     m_DraggedSplineKnot = nearest;
                     m_SplineDragOffset = m_SplineKnots[nearest].translation - cursor.translation;
+                    m_SplineMoveAtGrab = cursor.translation;
+                    m_SplineMoveStarted = false;
                     StartSplineRotation(cursor.rotation, m_SplineKnots[nearest].rotation);
                     break;
                 case SplineAction.MoveAndRotate:
-                    if (!m_StartNewSpline && !OwnsSplineDraftHistory)
+                    if (!OwnsSplineDraftHistory)
                     {
                         var hit = FindSavedSpline(cursor.translation, radius);
-                        if (hit != null)
-                        {
-                            if (hit != m_EditableSpline)
-                                OpenSavedSpline(hit);
-                            return -1;
-                        }
+                        if (hit != null && hit != m_EditableSpline)
+                            OpenSavedSpline(hit);
                     }
-                    if (m_EditableSpline == null && !m_SplineClosed)
-                        PlaceSplineKnot(cursor);
+                    return -1;
+                case SplineAction.Draw when m_EditableSpline == null && !m_SplineClosed:
+                    PlaceSplineKnot(cursor);
                     return m_DraggedSplineKnot;
                 case SplineAction.DeckDepth when nearest >= 0 && SplineHasDeck:
                     BeginSplineKnotEdit();
@@ -404,8 +487,7 @@ namespace TiltBrush
             m_SplineDragOffset = Vector3.zero;
             TrTransform snapped = SnapSplineKnot(cursor);
             if (SplineTracksTransitionHeading)
-                snapped.rotation = SplineAutoOrientEnabled ? SampleTransitionOrientation(m_SplineCanvas, cursor.rotation) :
-                    CaptureTransitionOrientation(m_SplineCanvas, cursor.rotation);
+                snapped.rotation = SnapTransitionAngle(TransitionBrush.HorizontalOrientation(cursor.rotation), m_SplineCanvas);
             else if (SplineUsesHeadingOffsets)
             {
                 snapped.rotation = Quaternion.identity;
@@ -482,15 +564,13 @@ namespace TiltBrush
 
         private void MoveSplineKnot(TrTransform cursor, Quaternion controllerRotation)
         {
-            if (m_DraggedSplineKnot < 0)
+            if (m_DraggedSplineKnot < 0 || m_brushTriggerDown)
                 return;
 
             int index = m_DraggedSplineKnot;
             var knot = m_SplineKnots[index];
             if (IsDeckDepthAction)
             {
-                if (m_brushTriggerDown)
-                    return;
                 float travel = Vector3.Dot(cursor.translation - m_DeckControllerAtGrab, m_DeckDragUp);
                 float unitsPerInch = TransitionBrush.UnitsPerInch * (m_EditableSpline?.m_BrushScale ?? 1f);
                 float depth = Mathf.Clamp(Mathf.Round((m_DeckDepthAtGrab + travel / unitsPerInch) * 2f) * 0.5f,
@@ -506,26 +586,39 @@ namespace TiltBrush
                 return;
             }
 
-            cursor = SnapSplineKnot(TrTransform.TR(cursor.translation + m_SplineDragOffset, cursor.rotation));
-            Vector3 moved = cursor.translation;
+            bool placing = m_SplineTopologyIndex >= 0;
+            bool stabilizeMove = !placing && (m_EditingTransitionSpline || SplineTracksTransitionHeading);
+            float moveThreshold = 0.001f * App.METERS_TO_UNITS / m_SplineCanvas.Pose.scale;
+            float moveThresholdSquared = moveThreshold * moveThreshold;
+            if (stabilizeMove && !m_SplineMoveStarted &&
+                (cursor.translation - m_SplineMoveAtGrab).sqrMagnitude > moveThresholdSquared)
+                m_SplineMoveStarted = true;
+            Vector3 moved = knot.translation;
+            if (!stabilizeMove || m_SplineMoveStarted)
+            {
+                cursor = SnapSplineKnot(TrTransform.TR(cursor.translation + m_SplineDragOffset, cursor.rotation),
+                    stabilizeMove ? knot.translation : null, moveThreshold);
+                moved = cursor.translation;
+                if (stabilizeMove && (moved - knot.translation).sqrMagnitude < moveThresholdSquared)
+                    moved = knot.translation;
+            }
             const float minimumDistanceSquared = 0.0000000001f;
             if (m_EditableSpline != null && IsSplineKnotTooClose(index, moved, minimumDistanceSquared))
                 moved = m_SplineKnots[index].translation;
 
             var headingBefore = m_SplineHeadingEditData;
             Quaternion rotation = knot.rotation;
-            bool placing = m_SplineTopologyIndex >= 0;
             if (!placing || SplineUsesHeadingOffsets)
             {
-                if (!m_brushTriggerDown && (!SplineAutoOrientEnabled || placing))
-                    rotation = UpdateSplineGrabRotation(controllerRotation);
+                if (!SplineAutoOrientEnabled || placing)
+                    rotation = UpdateSplineGrabRotation(controllerRotation, knot.rotation);
             }
             else
             {
                 if (!SplineTracksTransitionHeading)
                     rotation = cursor.rotation;
-                else if (!m_brushTriggerDown)
-                    rotation = SampleTransitionOrientation(m_SplineCanvas, controllerRotation);
+                else
+                    rotation = SnapTransitionAngle(TransitionBrush.HorizontalOrientation(controllerRotation), m_SplineCanvas);
             }
             if (knot.translation == moved && knot.rotation == rotation && headingBefore == m_SplineHeadingEditData)
                 return;
@@ -553,26 +646,44 @@ namespace TiltBrush
 
         private void StartSplineRotation(Quaternion controller, Quaternion knot)
         {
-            m_SplineControllerAtGrab = m_EditingTransitionSpline || SplineTracksTransitionHeading
-                ? SampleTransitionOrientation(m_SplineCanvas, controller, snap: false) : controller;
+            m_SplineControllerAtGrab = controller;
             m_SplineKnotAtGrab = knot;
         }
 
-        private Quaternion UpdateSplineGrabRotation(Quaternion controller)
+        private Quaternion UpdateSplineGrabRotation(Quaternion controller, Quaternion previous)
         {
-            if (m_EditingTransitionSpline || SplineTracksTransitionHeading)
-                controller = SampleTransitionOrientation(m_SplineCanvas, controller, snap: false);
-            if (Quaternion.Angle(m_SplineControllerAtGrab, controller) < 0.5f)
-                return m_SplineKnotAtGrab;
+            if (!m_EditingTransitionSpline && !SplineTracksTransitionHeading)
+            {
+                if (Quaternion.Angle(m_SplineControllerAtGrab, controller) < 0.5f)
+                    return m_SplineKnotAtGrab;
+                Quaternion rotated = SplineCurve.RotateGrabbedKnot(m_SplineKnotAtGrab, m_SplineControllerAtGrab, controller);
+                return SnapBrushAngle(rotated, m_SplineCanvas.Pose.rotation);
+            }
 
+            Quaternion desired = SplineCurve.RotateGrabbedKnotAroundUp(m_SplineKnotAtGrab,
+                m_SplineControllerAtGrab, controller, previous);
             if (m_EditingTransitionSpline && !SplineTracksTransitionHeading && !SplineUsesHeadingOffsets)
+            {
+                if (Quaternion.Angle(desired, previous) < 0.2f)
+                    return previous;
                 EnableRotationForOlderTransition();
-            Quaternion rotated = SplineCurve.RotateGrabbedKnot(m_SplineKnotAtGrab, m_SplineControllerAtGrab, controller);
-            if (SplineUsesHeadingOffsets)
-                return SelectionManager.m_Instance.QuantizeAngle(rotated);
-            return m_EditingTransitionSpline || SplineTracksTransitionHeading
-                ? SnapTransitionAngle(rotated, m_SplineCanvas)
-                : SnapBrushAngle(rotated, m_SplineCanvas.Pose.rotation);
+                previous = m_SplineKnotAtGrab;
+                desired = SplineCurve.RotateGrabbedKnotAroundUp(m_SplineKnotAtGrab,
+                    m_SplineControllerAtGrab, controller, previous);
+            }
+
+            var selection = SelectionManager.m_Instance;
+            bool angleSnapping = selection != null && selection.CurrentSnapAngleIndex != 0 &&
+                selection.m_EnableSnapRotationY;
+            Quaternion quantized = desired;
+            if (angleSnapping)
+            {
+                Quaternion basis = SplineUsesHeadingOffsets
+                    ? GetSplineTransitionTangent(m_DraggedSplineKnot * SplineCurve.SamplesPerSegment) ?? Quaternion.identity
+                    : Quaternion.identity;
+                quantized = SnapTransitionAngle(desired * basis, m_SplineCanvas) * Quaternion.Inverse(basis);
+            }
+            return SplineCurve.StabilizeGrabbedHeading(previous, desired, quantized, angleSnapping);
         }
 
         private void EnableRotationForOlderTransition()
@@ -591,7 +702,7 @@ namespace TiltBrush
             m_SplineHeadingEditData = new StrokeData(m_EditableSpline) { m_Flags = flags };
         }
 
-        private TrTransform SnapSplineKnot(TrTransform knot)
+        private TrTransform SnapSplineKnot(TrTransform knot, Vector3? previousPosition = null, float snapMargin = 0f)
         {
             TrTransform worldFromCanvas = m_SplineCanvas.Pose;
             TrTransform pose = worldFromCanvas * knot;
@@ -599,10 +710,27 @@ namespace TiltBrush
             bool onGuide = widgets.MagnetizeToStencils(ref pose.translation, ref pose.rotation);
             if (SelectionManager.m_Instance.CurrentSnapGridIndex != 0)
             {
+                Vector3 unsnapped = pose.translation;
                 pose.translation = SnapToGrid(pose.translation, allowAxisSlide: false);
                 // Project onto the same guide so snapping a grid axis cannot lift a point off its surface.
                 if (onGuide)
                     widgets.ProjectOntoActiveStencil(ref pose.translation, ref pose.rotation);
+                else if (previousPosition is Vector3 previous)
+                {
+                    var canvasFromWorld = worldFromCanvas.inverse;
+                    Vector3 raw = canvasFromWorld * unsnapped;
+                    Vector3 snapped = canvasFromWorld * pose.translation;
+                    var selection = SelectionManager.m_Instance;
+                    for (int axis = 0; axis < 3; axis++)
+                    {
+                        bool enabled = axis == 0 ? selection.m_EnableSnapTranslationX :
+                            axis == 1 ? selection.m_EnableSnapTranslationY : selection.m_EnableSnapTranslationZ;
+                        if (enabled &&
+                            Mathf.Abs(raw[axis] - previous[axis]) <= Mathf.Abs(raw[axis] - snapped[axis]) + snapMargin)
+                            snapped[axis] = previous[axis];
+                    }
+                    pose.translation = worldFromCanvas * snapped;
+                }
             }
             pose.rotation = SnapBrushAngle(pose.rotation, Quaternion.identity);
             return worldFromCanvas.inverse * TrTransform.TR(pose.translation, pose.rotation);
@@ -693,7 +821,9 @@ namespace TiltBrush
             foreach (var knot in snapshot.Knots)
                 AddSplineKnot(knot);
             SampleSpline();
-            if (!IsSplineActionAvailable(m_SplineAction))
+            UpdateSplineBrushPreview();
+            if ((m_SplineAction == SplineAction.SelectCurve && m_SplineKnots.Count > 0) ||
+                !IsSplineActionAvailable(m_SplineAction))
                 m_SplineAction = SplineAction.MoveAndRotate;
         }
 
@@ -737,10 +867,14 @@ namespace TiltBrush
             float size = m_DraftSplineSize;
             var brush = m_DraftSplinePreviewBrush;
             bool isTransition = TransitionBrush.IsTransition(descriptor);
+            bool usesSteel = TransitionBrush.IsStandaloneSteelCoping(descriptor) ||
+                (isTransition && SplineSurfaceOptions.Coping == TransitionBrush.CopingKind.Steel);
+            int steelDiameter = usesSteel ? TransitionBrush.SteelDiameterHalfInches : 0;
             int turns = isTransition ? DraftSplineQuarterTurns : 0;
             bool styleChanged = brush == null || brush.Descriptor != descriptor ||
                 brush.CurrentColor != color || brush.BaseSize_PS != size ||
-                (brush is TransitionBrush transition && transition.QuarterTurns != turns);
+                (brush is TransitionBrush transition && (transition.QuarterTurns != turns ||
+                    (usesSteel && transition.NewStrokeSteelDiameterHalfInches != steelDiameter)));
             if (!m_SplinePreviewDirty && !styleChanged)
                 return;
             m_SplinePreviewDirty = false;
@@ -769,11 +903,17 @@ namespace TiltBrush
             {
                 brush.ResetBrushForPreview(start);
             }
-            if (isTransition && brush is TransitionBrush previewTransition)
+            if (brush is TransitionBrush previewTransition)
             {
-                previewTransition.NewStrokeSurfaceOptions = SplineSurfaceOptions;
-                previewTransition.NewStrokeAutoOrient = SplineAutoOrientEnabled;
-                previewTransition.PreviewStartDeckPressure = SplineDeckPressure(0);
+                if (usesSteel)
+                    previewTransition.NewStrokeSteelDiameterHalfInches = steelDiameter;
+                if (isTransition)
+                {
+                    previewTransition.NewStrokeSurfaceOptions = SplineSurfaceOptions;
+                    previewTransition.NewStrokeAutoOrient = SplineAutoOrientEnabled;
+                    previewTransition.PreviewClosedSweep = m_SplineClosed;
+                    previewTransition.PreviewStartDeckPressure = SplineDeckPressure(0);
+                }
             }
             for (int i = 0; i < m_SplineStrokePoints.Count && !brush.IsOutOfVerts(); i++)
             {
@@ -808,11 +948,19 @@ namespace TiltBrush
         {
             settings = default;
             if (m_SplineCanvas == null || m_SplineCanvas != App.ActiveCanvas || !UsesSplinePreview ||
-                !App.Instance.IsInStateThatAllowsPainting() || !TransitionBrush.IsTransition(SplineBrush))
+                !App.Instance.IsInStateThatAllowsPainting())
                 return false;
 
+            var brush = SplineBrush;
+            settings.IsStandaloneSteel = TransitionBrush.IsStandaloneSteelCoping(brush);
+            if (!settings.IsStandaloneSteel && !TransitionBrush.IsTransition(brush))
+                return false;
             settings.Options = SplineSurfaceOptions;
             settings.IsSelection = m_EditableSpline != null;
+            settings.SteelDiameterHalfInches = settings.IsSelection
+                ? TransitionBrush.SteelDiameterHalfInchesFor(m_EditableSpline) : TransitionBrush.SteelDiameterHalfInches;
+            if (settings.IsStandaloneSteel)
+                return true;
             if (!settings.IsSelection)
             {
                 settings.RadiusHalfInches = TransitionBrush.RadiusHalfInches;
@@ -842,23 +990,39 @@ namespace TiltBrush
 
         internal void SetTransitionSettings(TransitionSettings settings)
         {
-            if (!TryGetTransitionSettings(out var current) || settings.IsSelection != current.IsSelection)
+            if (!TryGetTransitionSettings(out var current) || settings.IsSelection != current.IsSelection ||
+                settings.IsStandaloneSteel != current.IsStandaloneSteel)
                 return;
 
             var options = settings.Options;
+            int steelDiameter = TransitionBrush.ClampSteelDiameter(settings.SteelDiameterHalfInches);
+            bool steelChanged = (current.IsStandaloneSteel || options.Coping == TransitionBrush.CopingKind.Steel) &&
+                steelDiameter != current.SteelDiameterHalfInches;
+            if (current.IsStandaloneSteel)
+            {
+                if (!steelChanged)
+                    return;
+                if (current.IsSelection)
+                    ChangeSelectedStandaloneSteelDiameter(steelDiameter);
+                else
+                    SetDraftSteelDiameter(steelDiameter);
+                return;
+            }
+
             bool featuresChanged = options.Coping != current.Options.Coping || options.Tile != current.Options.Tile ||
                 options.Deck != current.Options.Deck;
             int radiusHalfInches = Mathf.Clamp(settings.RadiusHalfInches,
                 TransitionBrush.MinRadiusInches * 2, TransitionBrush.MaxRadiusInches * 2);
             bool radiusChanged = settings.RadiusHalfInches != current.RadiusHalfInches &&
                 radiusHalfInches != current.RadiusHalfInches;
-            if (!featuresChanged && !radiusChanged)
+            if (!featuresChanged && !radiusChanged && !steelChanged)
                 return;
 
             if (settings.IsSelection)
             {
                 ChangeSelectedTransitionSettings(featuresChanged ? options : null,
-                    radiusChanged ? radiusHalfInches : null, deckDepthSteps: 0);
+                    radiusChanged ? radiusHalfInches : null, deckDepthSteps: 0,
+                    steelDiameterHalfInches: steelChanged ? steelDiameter : null);
                 return;
             }
 
@@ -876,11 +1040,50 @@ namespace TiltBrush
                 m_SplinePreviewDirty = true;
                 UpdateSplineBrushPreview();
             }
+            if (steelChanged)
+                SetDraftSteelDiameter(steelDiameter);
+        }
+
+        private void SetDraftSteelDiameter(int halfInches)
+        {
+            PointerManager.m_Instance.SetSteelDiameterHalfInches(halfInches);
+            PlayerPrefs.Save();
+            UpdateSplineBrushPreview();
+        }
+
+        private void StepStandaloneSteelDiameter(int steps)
+        {
+            if (TryGetTransitionSettings(out var current) && current.IsStandaloneSteel && current.IsSelection)
+            {
+                int diameter = TransitionBrush.ClampSteelDiameter(current.SteelDiameterHalfInches + steps);
+                if (diameter != current.SteelDiameterHalfInches)
+                    ChangeSelectedStandaloneSteelDiameter(diameter);
+            }
+            else
+            {
+                PointerManager.m_Instance.SetSteelDiameterHalfInches(TransitionBrush.SteelDiameterHalfInches + steps);
+            }
+        }
+
+        private void ChangeSelectedStandaloneSteelDiameter(int halfInches)
+        {
+            RefreshEditableSpline();
+            if (m_EditableSpline == null || !TransitionBrush.IsStandaloneSteelCoping(m_SplineEditBrush))
+                return;
+            PauseSplineInput();
+            var stroke = m_EditableSpline;
+            var flags = TransitionBrush.FlagsWithSteelDiameter(stroke.m_Flags, halfInches);
+            var points = (PointerManager.ControlPoint[])stroke.m_ControlPoints.Clone();
+            float size = halfInches * 0.5f * TransitionBrush.UnitsPerInch;
+            m_SplineMemory.PerformAndRecordCommand(
+                new ModifyStrokePointsCommand(stroke, points, flags, size, stroke.m_SplineControlPoints));
+            LoadSavedSplineKnots();
+            EatInput();
         }
 
         internal void StepTransitionDeckDepth(int direction)
         {
-            if (direction == 0 || !TryGetTransitionSettings(out var settings))
+            if (direction == 0 || !TryGetTransitionSettings(out var settings) || settings.IsStandaloneSteel)
                 return;
             if (settings.IsSelection)
             {
@@ -910,7 +1113,7 @@ namespace TiltBrush
         }
 
         private void ChangeSelectedTransitionSettings(TransitionBrush.SurfaceOptions? options,
-            int? radiusHalfInches, int deckDepthSteps)
+            int? radiusHalfInches, int deckDepthSteps, int? steelDiameterHalfInches = null)
         {
             RefreshEditableSpline();
             if (!m_EditingTransitionSpline || m_EditableSpline == null)
@@ -922,6 +1125,8 @@ namespace TiltBrush
             bool preserveDepth = !TransitionBrush.HasVariableDeck(stroke);
             if (options.HasValue)
                 flags = TransitionBrush.FlagsWithSurfaceOptions(flags, options.Value);
+            if (steelDiameterHalfInches.HasValue)
+                flags = TransitionBrush.FlagsWithSteelDiameter(flags, steelDiameterHalfInches.Value);
             var points = (PointerManager.ControlPoint[])stroke.m_ControlPoints.Clone();
             var authoredPoints = stroke.m_SplineControlPoints;
             bool depthChanged = false;
@@ -993,9 +1198,7 @@ namespace TiltBrush
                     continue;
 
                 var descriptor = BrushCatalog.m_Instance.GetBrush(stroke.m_BrushGuid);
-                // For transitions the brush size is the radius of the whole surface, not the width of the coping path.
-                float radius = TransitionBrush.IsTransition(descriptor) ? pickRadius :
-                    pickRadius + stroke.SizeInLocalSpace * 0.5f;
+                float radius = SplinePickRadius(stroke, descriptor, pickRadius);
                 var points = stroke.m_ControlPoints;
                 for (int i = 1; i < points.Length; i++)
                 {
@@ -1011,20 +1214,115 @@ namespace TiltBrush
             return nearest;
         }
 
-        private bool CanSelectSplineStroke(Stroke stroke) => stroke.IsGeometryEnabled && stroke.Canvas == m_SplineCanvas &&
-            (SplineCurve.IsEditable(stroke) || (stroke.m_ControlPoints?.Length >= 2 &&
-                TransitionBrush.IsTransition(BrushCatalog.m_Instance.GetBrush(stroke.m_BrushGuid))));
+        private void UpdateSplineSelection()
+        {
+            if (SketchControlsScript.m_Instance.IsBrushPointingAtPanel())
+            {
+                PauseSplineInput();
+                return;
+            }
+
+            Transform controller = InputManager.m_Instance.GetBrushControllerAttachPoint();
+            var ray = new Ray(controller.position, controller.forward);
+            float depth = kSplineSelectReach;
+            Stroke hit = FindSavedSpline(ray, ref depth);
+            UpdateSplineSelectionRay(ray, depth, hit != null);
+            if (!m_brushTriggerDown)
+                return;
+
+            if (hit == null)
+            {
+                ShowSplineHint("Aim the laser at a saved curve");
+                return;
+            }
+            if (m_EditableSpline == null && m_SplineKnots.Count > 0)
+            {
+                ShowSplineHint("Finish the current curve before selecting another");
+                m_SplineAction = SplineAction.MoveAndRotate;
+                m_SplineSelectRay.enabled = false;
+                return;
+            }
+
+            m_SplineSelectRay.enabled = false;
+            OpenSavedSpline(hit);
+        }
+
+        private Stroke FindSavedSpline(Ray ray, ref float depth)
+        {
+            Stroke hit = null;
+            m_SplineStrokePicker.BeginQuery();
+            foreach (var stroke in m_SplineMemory.GetMemoryList)
+            {
+                if (!CanSelectSplineStroke(stroke))
+                    continue;
+                var preview = stroke == m_EditableSpline && m_SavedSplinePreviewBrush != null
+                    ? m_SavedSplinePreviewBrush.gameObject : null;
+                if (m_SplineStrokePicker.TryHitStroke(stroke, preview, ray, ref depth))
+                    hit = stroke;
+            }
+            return hit;
+        }
+
+        private static float SplinePickRadius(Stroke stroke, BrushDescriptor brush, float tolerance)
+        {
+            if (TransitionBrush.IsStandaloneSteelCoping(brush))
+                return tolerance + TransitionBrush.SteelDiameterInchesFor(stroke) * 0.5f *
+                    TransitionBrush.UnitsPerInch * stroke.m_BrushScale;
+            // The transition's main size is the surface radius, far wider than its coping.
+            return TransitionBrush.IsTransition(brush) ? tolerance : tolerance + stroke.SizeInLocalSpace * 0.5f;
+        }
+
+        private void UpdateSplineSelectionRay(Ray ray, float depth, bool hit)
+        {
+            if (m_SplineSelectRay == null)
+            {
+                if (m_SplineSelectRayMaterial == null)
+                {
+                    m_SplineSelectRayMaterial = new Material(
+                        Resources.Load<Shader>("Brushes/Basic/Transition/TransitionPreviewLine"));
+                    m_SplineSelectRayMaterial.SetFloat("_Dashed", 0f);
+                }
+                var beam = new GameObject("Select spline ray") { layer = gameObject.layer };
+                beam.transform.SetParent(m_SplinePreview.transform, false);
+                m_SplineSelectRay = beam.AddComponent<LineRenderer>();
+                m_SplineSelectRay.useWorldSpace = true;
+                m_SplineSelectRay.positionCount = 2;
+                m_SplineSelectRay.widthMultiplier = kSplineSelectRayWidth;
+                m_SplineSelectRay.numCapVertices = 4;
+                m_SplineSelectRay.sharedMaterial = m_SplineSelectRayMaterial;
+                m_SplineSelectRay.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                m_SplineSelectRay.receiveShadows = false;
+                m_SplineSelectRay.allowOcclusionWhenDynamic = false;
+            }
+            m_SplineSelectRayMaterial.color = hit ? kSplineSelectHitColor : kSplineSelectRayColor;
+            m_SplineSelectRay.SetPosition(0, ray.origin);
+            m_SplineSelectRay.SetPosition(1, ray.GetPoint(depth));
+            m_SplineSelectRay.enabled = true;
+        }
+
+        private bool CanSelectSplineStroke(Stroke stroke)
+        {
+            bool previewVisible = stroke == m_EditableSpline && m_SavedSplinePreviewBrush != null &&
+                m_SavedSplinePreviewBrush.gameObject.activeInHierarchy;
+            if ((!stroke.IsGeometryEnabled && !previewVisible) || stroke.Canvas != m_SplineCanvas)
+                return false;
+            var brush = BrushCatalog.m_Instance.GetBrush(stroke.m_BrushGuid);
+            return !ModularCopingBrush.IsModular(brush) && (SplineCurve.IsEditable(stroke) ||
+                (stroke.m_ControlPoints?.Length >= 2 && (TransitionBrush.IsTransition(brush) ||
+                    TransitionBrush.IsStandaloneSteelCoping(brush))));
+        }
 
         private void OpenSavedSpline(Stroke stroke)
         {
             ClearSplineBrushPreview();
             m_DraftSplineDescriptor = null;
             m_EditableSpline = stroke;
-            m_StartNewSpline = false;
             m_SplineAction = SplineAction.MoveAndRotate;
             LoadSavedSplineKnots();
-            if (m_EditingTransitionSpline)
+            if (m_EditingTransitionSpline || TransitionBrush.IsStandaloneSteelCoping(m_SplineEditBrush))
                 m_TransitionSettingsOpenedForPlacement = false;
+            if (BrushController.m_Instance.SetActiveBrushFromSpline(m_SplineEditBrush))
+                m_DraftSplineSurfaceOptions = null;
             InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Brush, 0.035f);
         }
 
@@ -1128,7 +1426,10 @@ namespace TiltBrush
             }
             brush.SetStrokeData(SplineEditData);
             if (m_EditingTransitionSpline && brush is TransitionBrush transition)
+            {
                 transition.PreviewStartDeckPressure = SplineDeckPressure(0);
+                transition.PreviewClosedSweep = m_SplineClosed;
+            }
 
             for (int i = 0; i < m_SplineStrokePoints.Count && !brush.IsOutOfVerts(); i++)
             {
@@ -1254,6 +1555,9 @@ namespace TiltBrush
             }
             if (SplineAutoOrientEnabled)
                 flags |= SketchMemoryScript.StrokeFlags.SplineAutoOrient;
+            if (TransitionBrush.IsStandaloneSteelCoping(descriptor) ||
+                (TransitionBrush.IsTransition(descriptor) && SplineSurfaceOptions.Coping == TransitionBrush.CopingKind.Steel))
+                flags = TransitionBrush.FlagsWithSteelDiameter(flags, TransitionBrush.SteelDiameterHalfInches);
             var stroke = new Stroke
             {
                 m_Type = Stroke.Type.NotCreated,
@@ -1284,7 +1588,9 @@ namespace TiltBrush
             // A palette selection is for the next spline once this one has a point.
             if (m_DraftSplineDescriptor == null || pointer.CurrentBrush != m_DraftSplineDescriptor)
                 return;
-            if (!TransitionBrush.IsTransition(m_DraftSplineDescriptor))
+            if (TransitionBrush.IsStandaloneSteelCoping(m_DraftSplineDescriptor))
+                m_DraftSplineSize = TransitionBrush.SteelDiameterInches * TransitionBrush.UnitsPerInch;
+            else if (!TransitionBrush.IsTransition(m_DraftSplineDescriptor))
                 m_DraftSplineSize = pointer.BrushSizeAbsolute;
             m_DraftSplineColor = App.BrushColor.CurrentColor;
             m_DraftSplineQuarterTurns = TransitionBrush.PreferredQuarterTurns;
@@ -1347,6 +1653,9 @@ namespace TiltBrush
         {
             ReleaseSplineKnot();
             m_HoveredSplineKnot = -1;
+            m_SplineStrokePicker.BeginQuery();
+            if (m_SplineSelectRay != null)
+                m_SplineSelectRay.enabled = false;
         }
 
         private void ClearSplineDraft()
@@ -1366,7 +1675,6 @@ namespace TiltBrush
                 m_SplineMemory.SketchClearing -= OnSplineSketchClearing;
             m_SplineMemory = null;
             m_SplineAction = SplineAction.MoveAndRotate;
-            m_StartNewSpline = false;
             m_SplineClosed = false;
             m_SplineCanvas = null;
             m_SplinePreviewDirty = false;
@@ -1386,12 +1694,14 @@ namespace TiltBrush
                 Destroy(m_SplinePreview);
                 m_SplinePreview = null;
                 m_SplineHull = null;
+                m_SplineSelectRay = null;
             }
         }
 
         private void OnSplineSketchClearing()
         {
             // Clearing the sketch removes the preview stroke along with the other geometry.
+            CancelModularCopingPlacement();
             ReleaseSavedSplinePreview();
             ClearSplineDraft();
         }
@@ -1402,20 +1712,16 @@ namespace TiltBrush
                 !m_brushUndoButtonDown)
                 return false;
 
-            var panels = PanelManager.m_Instance;
-            const BasePanel.PanelType panelType = BasePanel.PanelType.Spline;
-            if (panels.IsPanelOpen(panelType))
-                panels.DismissNonCorePanel(panelType);
-            else
-                OpenSplinePanel(panelType, 1.6f);
+            if (!PanelManager.m_Instance.TryFocusWandPanel(BasePanel.PanelType.Spline))
+                return false;
 
-            m_HoveredSplineKnot = -1;
+            PauseSplineInput();
             return true;
         }
 
         private void UpdateTransitionSettingsPanel(bool canOpen)
         {
-            if (!TransitionBrush.IsTransition(SplineBrush))
+            if (!TransitionBrush.IsTransition(SplineBrush) && !TransitionBrush.IsStandaloneSteelCoping(SplineBrush))
             {
                 HideTransitionSettingsPanel();
                 return;
@@ -1463,13 +1769,13 @@ namespace TiltBrush
 
         internal bool IsSplineActionAvailable(SplineAction action)
         {
-            if (!UsesSplinePreview || !App.Instance.IsInStateThatAllowsPainting() ||
+            if (!UsesSplinePreview || UsesModularCoping || !App.Instance.IsInStateThatAllowsPainting() ||
                 m_SplineCanvas != App.ActiveCanvas || MultiplayerManager.m_Instance.IsViewOnly)
                 return false;
 
             return action switch
             {
-                SplineAction.MoveAndRotate => true,
+                SplineAction.MoveAndRotate or SplineAction.Draw => true,
                 SplineAction.Append => m_SplineKnots.Count > 0 && !m_SplineClosed,
                 SplineAction.Insert => m_SplineKnots.Count >= 2,
                 SplineAction.Delete => m_SplineKnots.Count > MinimumSplineKnots,
@@ -1477,6 +1783,7 @@ namespace TiltBrush
                 SplineAction.ToggleLoop => m_SplineClosed || m_SplineKnots.Count >= 3,
                 SplineAction.NewSpline => true,
                 SplineAction.ToggleAutoOrient => CanEditSelectedSplineKnots,
+                SplineAction.SelectCurve => true,
                 _ => false,
             };
         }
@@ -1491,9 +1798,16 @@ namespace TiltBrush
         {
             if (!IsSplineActionAvailable(action))
                 return;
-            if (action == SplineAction.NewSpline)
+            if (action == SplineAction.Draw && (m_EditableSpline != null || m_SplineClosed))
             {
-                FinishSplineAndStartAnother(keepTransitionSettings: true);
+                TryFinishSplineAndStartAnother(keepTransitionSettings: true, nextAction: SplineAction.Draw);
+                return;
+            }
+            if (action is SplineAction.NewSpline or SplineAction.SelectCurve)
+            {
+                TryFinishSplineAndStartAnother(keepTransitionSettings: true,
+                    nextAction: action == SplineAction.NewSpline ? SplineAction.Draw : SplineAction.SelectCurve,
+                    completeDraftOnly: action == SplineAction.SelectCurve);
                 return;
             }
 
@@ -1575,7 +1889,10 @@ namespace TiltBrush
             if (m_EditableSpline != null)
                 ApplySavedSplineEdit();
             else
+            {
                 RecordSplineDraftEdit();
+                UpdateSplineBrushPreview();
+            }
             return true;
         }
 
@@ -1583,19 +1900,26 @@ namespace TiltBrush
         {
             base.HideTool(hide);
             if (hide)
+            {
+                CancelModularCopingPlacement();
                 PauseSplineInput();
+            }
         }
 
         protected override void OnDestroy()
         {
+            DestroyModularCopingPreview();
             ClearSplineDraft();
             Destroy(m_SplineMaterial);
             Destroy(m_SplineSelectedMaterial);
             Destroy(m_SplineHullMaterial);
+            Destroy(m_SplineSelectRayMaterial);
             if (m_TransitionPreviewLine != null)
                 Destroy(m_TransitionPreviewLine.gameObject);
             Destroy(m_TransitionPreviewMaterial);
-            Destroy(m_TransitionHeightLabelMaterial);
+            if (m_BrushHeightLabel != null)
+                Destroy(m_BrushHeightLabel.gameObject);
+            Destroy(m_BrushHeightLabelMaterial);
             base.OnDestroy();
         }
 

@@ -16,6 +16,30 @@ namespace TiltBrush
         internal static Quaternion RotateGrabbedKnot(Quaternion knotAtGrab, Quaternion controllerAtGrab,
             Quaternion currentController) => currentController * Quaternion.Inverse(controllerAtGrab) * knotAtGrab;
 
+        internal static Quaternion RotateGrabbedKnotAroundUp(Quaternion knotAtGrab, Quaternion controllerAtGrab,
+            Quaternion currentController, Quaternion previous)
+        {
+            Quaternion turn = currentController * Quaternion.Inverse(controllerAtGrab);
+            float twistLengthSquared = turn.y * turn.y + turn.w * turn.w;
+            // Near a 180-degree tilt, the twist is undefined. Keep the last heading through that pose.
+            if (twistLengthSquared < 0.0001f)
+                return previous;
+            float normalize = 1f / Mathf.Sqrt(twistLengthSquared);
+            return new Quaternion(0f, turn.y * normalize, 0f, turn.w * normalize) * knotAtGrab;
+        }
+
+        internal static Quaternion StabilizeGrabbedHeading(Quaternion previous, Quaternion desired,
+            Quaternion quantized, bool angleSnapping)
+        {
+            float travel = Quaternion.Angle(previous, desired);
+            const float noiseThreshold = 0.2f;
+            const float snapHysteresis = 1f;
+            if (travel < noiseThreshold ||
+                (angleSnapping && travel <= Quaternion.Angle(quantized, desired) + snapHysteresis))
+                return previous;
+            return quantized;
+        }
+
         internal static bool IsEditable(StrokeData stroke)
         {
             int count = stroke.m_SplineKnotCount;

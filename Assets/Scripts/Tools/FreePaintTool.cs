@@ -63,6 +63,7 @@ namespace TiltBrush
             base.EnableTool(bEnable);
             if (!bEnable)
             {
+                ExitModularCoping();
                 SetSplinePreviewVisible(false);
                 HideTransitionSettingsPanel();
                 PointerManager.m_Instance.EnableLine(false);
@@ -223,7 +224,8 @@ namespace TiltBrush
                         InputManager.Brush.Geometry.ShowBrushSizer();
                         if (UsesSplinePreview)
                         {
-                            InputManager.Brush.Geometry.ShowSplineModeHint(editing: true);
+                            if (!UsesModularCoping)
+                                InputManager.Brush.Geometry.ShowSplineModeHint(editing: true);
                             if (PanelManager.m_Instance.AdvancedModeActive())
                                 InputManager.Brush.Geometry.ShowPinCushion();
                         }
@@ -319,25 +321,30 @@ namespace TiltBrush
             return Quaternion.Inverse(sceneFromSpace) * selection.QuantizeAngle(sceneFromSpace * rotation);
         }
 
-        private float m_TransitionRadiusStep;
+        private float m_ConstructionSizeStep;
 
         override public void UpdateSize(float fAdjustAmount)
         {
-            if (TransitionBrush.IsTransition(PointerManager.m_Instance.MainPointer.CurrentBrush))
+            var brush = PointerManager.m_Instance.MainPointer.CurrentBrush;
+            bool standaloneSteel = TransitionBrush.IsStandaloneSteelCoping(brush);
+            if (standaloneSteel || TransitionBrush.IsTransition(brush))
             {
-                if (m_TransitionRadiusStep * fAdjustAmount < 0)
-                    m_TransitionRadiusStep = 0;
-                m_TransitionRadiusStep += fAdjustAmount * 12f;
-                int increments = (int)m_TransitionRadiusStep;
+                if (m_ConstructionSizeStep * fAdjustAmount < 0)
+                    m_ConstructionSizeStep = 0;
+                m_ConstructionSizeStep += fAdjustAmount * 12f;
+                int increments = (int)m_ConstructionSizeStep;
                 if (increments != 0)
                 {
-                    m_TransitionRadiusStep -= increments;
-                    PointerManager.m_Instance.SetTransitionRadiusHalfInches(
-                        TransitionBrush.RadiusHalfInches + increments * 2);
+                    m_ConstructionSizeStep -= increments;
+                    if (standaloneSteel)
+                        StepStandaloneSteelDiameter(increments);
+                    else
+                        PointerManager.m_Instance.SetTransitionRadiusHalfInches(
+                            TransitionBrush.RadiusHalfInches + increments * 2);
                 }
                 return;
             }
-            m_TransitionRadiusStep = 0;
+            m_ConstructionSizeStep = 0;
             float fPrevRatio = GetSize01();
             bool useExtendedRange = App.VrSdk.AnalogIsStick(InputManager.ControllerName.Brush);
             PointerManager.m_Instance.AdjustAllPointersBrushSize01(m_AdjustSizeScalar * fAdjustAmount, useExtendedRange);

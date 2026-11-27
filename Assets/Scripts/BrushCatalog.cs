@@ -1,4 +1,4 @@
-﻿// Copyright 2020 The Tilt Brush Authors
+// Copyright 2020 The Tilt Brush Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -186,7 +186,7 @@ namespace TiltBrush
             foreach (var brush in m_GuidToBrush.Values)
             {
                 if (brush.m_DurableName != "Icing" && brush.m_DurableName != "DuctTape" &&
-                    TransitionBrush.StyleFor(brush) == TransitionBrush.SweepStyle.None)
+                    TransitionBrush.StyleFor(brush) == TransitionBrush.SweepStyle.None && !ModularCopingBrush.IsModular(brush))
                     continue;
                 // Some brushes are hardcoded as hidden
                 if (brush.m_HiddenInGui) continue;
