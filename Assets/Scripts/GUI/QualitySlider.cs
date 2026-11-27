@@ -26,7 +26,7 @@ namespace TiltBrush
         private int SelectedStep => m_HasAutomaticStep && QualityControls.m_Instance.AutomaticQualityEnabled
             ? 0
             : Mathf.Clamp(QualityControls.m_Instance.QualityLevel, 0,
-                QualityControls.m_Instance.AppQualityLevels.Length - 1) + (m_HasAutomaticStep ? 1 : 0);
+                QualityControls.m_Instance.MaxQualityLevel) + (m_HasAutomaticStep ? 1 : 0);
 
         override protected void Awake()
         {
@@ -35,7 +35,7 @@ namespace TiltBrush
             // Mobile supports dynamic quality. Its first position selects Auto,
             // followed by one position per manual level in the active app ladder.
             m_HasAutomaticStep = QualityControls.m_Instance.SupportsAutomaticQuality;
-            int iNumQualitySettings = Mathf.Max(QualityControls.m_Instance.AppQualityLevels.Length, 1) +
+            int iNumQualitySettings = Mathf.Max(QualityControls.m_Instance.MaxQualityLevel + 1, 1) +
                 (m_HasAutomaticStep ? 1 : 0);
             float fStepInterval = 1.0f / Mathf.Max(iNumQualitySettings - 1, 1);
             m_Steps = new float[iNumQualitySettings];
@@ -111,7 +111,7 @@ namespace TiltBrush
             if (m_HasAutomaticStep)
             {
                 return SelectedStep == 0 ? "Automatic" :
-                    $"Manual level {SelectedStep} of {QualityControls.m_Instance.AppQualityLevels.Length}";
+                    $"Manual level {SelectedStep - 1}";
             }
             return QualitySettings.names[SelectedStep];
         }

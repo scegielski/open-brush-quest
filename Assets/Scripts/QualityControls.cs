@@ -27,6 +27,7 @@ namespace TiltBrush
     {
         static public QualityControls m_Instance;
         private const string kAutoSimplificationEnabled = "Autosimplification Enabled";
+        private const int kQuestMaxQualityLevel = 1;
 
         private List<Camera> m_Cameras;
 
@@ -70,7 +71,11 @@ namespace TiltBrush
         private bool m_AutomaticQualityEnabled = true;
         private bool m_ApplicationPaused;
         private bool m_HadMeasurementFocus;
+        private bool m_CapQuestQuality;
         public bool SupportsAutomaticQuality => App.Config.IsMobileHardware;
+        public int MaxQualityLevel => m_CapQuestQuality
+            ? Mathf.Min(kQuestMaxQualityLevel, AppQualityLevels.Length - 1)
+            : AppQualityLevels.Length - 1;
 
         // Temporary Steam Frame/Lepton compatibility policy.
         // Frame reproduces corruption only when reduced viewports and foveation
@@ -105,7 +110,7 @@ namespace TiltBrush
 
         public void ConfigureQualityLevel(int level, int msaa, int foveation)
         {
-            if (level < 0 || level >= AppQualityLevels.Length)
+            if (level < 0 || level > MaxQualityLevel)
                 throw new ArgumentOutOfRangeException(nameof(level));
             if (msaa != 1 && msaa != 2 && msaa != 4 && msaa != 8)
                 throw new ArgumentOutOfRangeException(nameof(msaa));
@@ -201,10 +206,10 @@ namespace TiltBrush
         {
             get
             {
-                int defaultLevel = App.Config.IsMobileHardware ? AppQualityLevels.Length - 1 : 2;
+                int defaultLevel = App.Config.IsMobileHardware ? MaxQualityLevel : 2;
                 int configuredLevel = App.UserConfig.Profiling.QualityLevel;
                 return configuredLevel >= 0 && configuredLevel < AppQualityLevels.Length
-                    ? configuredLevel : defaultLevel;
+                    ? Mathf.Min(configuredLevel, MaxQualityLevel) : defaultLevel;
             }
         }
 
@@ -225,6 +230,8 @@ namespace TiltBrush
             m_Instance = this;
 
             m_Cameras = new List<Camera>();
+            m_CapQuestQuality = Application.platform == RuntimePlatform.Android &&
+                SystemInfo.deviceModel.Contains("Quest", StringComparison.OrdinalIgnoreCase);
 
             // Apply the quality level.
             PrepareSessionRendering();
@@ -320,7 +327,7 @@ namespace TiltBrush
             m_AutomaticQualityPolicy.RecoverySeconds = profiling.QualityRecoverySeconds;
             m_AutomaticQualityPolicy.RetrySeconds = profiling.QualityRetrySeconds;
             int nextLevel = m_AutomaticQualityPolicy.Evaluate(m_TimeSinceStart, QualityLevel,
-                AppQualityLevels.Length - 1, m_FramesInLastSecond,
+                MaxQualityLevel, m_FramesInLastSecond,
                 m_RuntimeLowerFps ?? AppQualityLevels.LowerQualityFpsTrigger,
                 m_RuntimeHigherFps ?? AppQualityLevels.HigherQualityFpsTrigger,
                 m_RuntimeLowerFrames ?? AppQualityLevels.FramesForLowerQuality,
@@ -345,7 +352,6 @@ namespace TiltBrush
 
         void SetQualityLevel(int value)
         {
-            if (value != QualityLevel) m_AutomaticQualityPolicy.ResetMeasurement(m_TimeSinceStart);
             AppQualitySettingLevels settingLevels = AppQualityLevels;
             if (settingLevels != null && (value < 0 || value >= settingLevels.Length))
                 throw new ArgumentOutOfRangeException(nameof(value));
@@ -356,9 +362,11 @@ namespace TiltBrush
             }
             else
             {
+                value = Mathf.Min(value, MaxQualityLevel);
                 settings = settingLevels[value];
             }
 
+            if (value != QualityLevel) m_AutomaticQualityPolicy.ResetMeasurement(m_TimeSinceStart);
             SetBloomMode(settings.Bloom);
             EnableHDR(SessionHdr);
             EnableFxaa(settings.Fxaa);

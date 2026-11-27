@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using OpenBrush.Multiplayer;
+using Unity.Profiling;
 using UnityEngine;
 
 namespace TiltBrush
@@ -34,6 +35,8 @@ namespace TiltBrush
         private const float kSplineSelectRayWidth = 0.0045f * App.METERS_TO_UNITS;
         private static readonly Color kSplineSelectRayColor = new(0.08f, 0.86f, 1f);
         private static readonly Color kSplineSelectHitColor = new(1f, 0.8f, 0.15f);
+        private static readonly ProfilerMarker kRebuildDraftSplinePreview =
+            new("FreePaintTool.RebuildDraftSplinePreview");
 
         // For Transition, scale holds the deck depth relative to the default depth (1).
         private readonly List<TrTransform> m_SplineKnots = new();
@@ -872,7 +875,7 @@ namespace TiltBrush
             int steelDiameter = usesSteel ? TransitionBrush.SteelDiameterHalfInches : 0;
             int turns = isTransition ? DraftSplineQuarterTurns : 0;
             bool styleChanged = brush == null || brush.Descriptor != descriptor ||
-                brush.CurrentColor != color || brush.BaseSize_PS != size ||
+                !brush.MatchesColor(color) || brush.BaseSize_PS != size ||
                 (brush is TransitionBrush transition && (transition.QuarterTurns != turns ||
                     (usesSteel && transition.NewStrokeSteelDiameterHalfInches != steelDiameter)));
             if (!m_SplinePreviewDirty && !styleChanged)
@@ -884,6 +887,7 @@ namespace TiltBrush
                 return;
             }
 
+            using var sample = kRebuildDraftSplinePreview.Auto();
             var first = m_SplineStrokePoints[0];
             var start = TrTransform.TR(first.m_Pos, SplineSampleOrientation(0));
             if (styleChanged || !brush.AlwaysRebuildPreviewBrush())
@@ -1727,18 +1731,27 @@ namespace TiltBrush
                 return;
             }
 
-            if (canOpen && !m_TransitionSettingsOpenedForPlacement)
+            if (!canOpen || m_TransitionSettingsOpenedForPlacement)
+                return;
+
+            var panels = PanelManager.m_Instance;
+            if (!panels.StandardActive() || !panels.GazePanelsAreVisible())
+                return;
+
+            const BasePanel.PanelType panelType = BasePanel.PanelType.TransitionSettings;
+            if (!panels.IsPanelOpen(panelType))
             {
-                m_TransitionSettingsOpenedForPlacement = true;
-                const BasePanel.PanelType panelType = BasePanel.PanelType.TransitionSettings;
-                if (!PanelManager.m_Instance.IsPanelOpen(panelType))
-                {
-                    if (m_TransitionSettingsPlacement is TrTransform placement)
-                        SketchControlsScript.m_Instance.OpenPanelOfType(panelType, placement);
-                    else
-                        OpenSplinePanel(panelType, -1.85f, distance: 4.6f, heightOffset: -0.55f);
-                }
+                var panel = panels.GetPanelByType(panelType);
+                if (panel == null || !panels.IsPanelAvailable(panel) || panel.WidgetSibling == null)
+                    return;
+
+                if (m_TransitionSettingsPlacement is TrTransform placement)
+                    SketchControlsScript.m_Instance.OpenPanelOfType(panelType, placement);
+                else
+                    OpenSplinePanel(panelType, -1.85f, distance: 4.6f, heightOffset: -0.55f);
             }
+
+            m_TransitionSettingsOpenedForPlacement = panels.IsPanelOpen(panelType);
         }
 
         private void HideTransitionSettingsPanel()

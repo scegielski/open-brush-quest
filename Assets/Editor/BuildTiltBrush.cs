@@ -28,6 +28,7 @@ using UnityEditor.iOS.Xcode;
 using UnityEditor.SceneManagement;
 using UnityEditor.XR.Management;
 using UnityEngine;
+using UnityEngine.Rendering.Universal;
 using UnityEngine.XR.Management;
 using Environment = System.Environment;
 
@@ -70,6 +71,7 @@ static class BuildTiltBrush
         public string Description;
         public bool disableAccountLogins;
         public bool AndroidBuildAppBundle;
+        public bool QuestRendering;
         // Android app bundles are the Google Play builds.
         public bool AndroidScopedStorage => Target == BuildTarget.Android && AndroidBuildAppBundle;
         public AndroidSdkVersions? AndroidTargetSdkVersion;
@@ -719,6 +721,7 @@ static class BuildTiltBrush
     //   -btb-increment-bundle-version  Increment PlayerSettings "bundleVersionCode"; use this
     //                       when uploading a build. [This is no longer used]
     //   -btb-android-target-sdk VERSION  Temporarily override Android targetSdkVersion.
+    //   -btb-quest-rendering  Use the Quest rendering configuration for an Android OpenXR APK.
     //
     [PublicAPI]
     static void CommandLine()
@@ -761,6 +764,10 @@ static class BuildTiltBrush
                     string mode = args[++i];
                     // TODO: Legacy; remove when our build shortcuts are updated
                     tiltOptions.XrSdk = AsEnum(mode, tiltOptions.XrSdk);
+                }
+                else if (args[i] == "-btb-quest-rendering")
+                {
+                    tiltOptions.QuestRendering = true;
                 }
                 else if (args[i] == "-btb-description")
                 {
@@ -1321,6 +1328,82 @@ static class BuildTiltBrush
         }
     }
 
+    class TempSetQuestRendering : IDisposable
+    {
+        readonly SerializedObject m_EditorSettings;
+        readonly SerializedObject m_MobileQuality;
+        readonly UniversalRendererData m_Renderer;
+        readonly bool m_Offscreen;
+        readonly bool m_Hdr;
+        readonly int m_Msaa;
+        readonly IntermediateTextureMode m_IntermediateTexture;
+
+        public TempSetQuestRendering(TiltBuildOptions options)
+        {
+            if (!options.QuestRendering)
+                return;
+
+            var editorSettings = AssetDatabase.LoadAssetAtPath<ScriptableObject>(
+                "Assets/XR/Settings/OpenXR Editor Settings.asset");
+            var mobileQuality = AssetDatabase.LoadAssetAtPath<AppQualitySettingLevels>(
+                "Assets/QualityLevels Mobile.asset");
+            m_Renderer = AssetDatabase.LoadAssetAtPath<UniversalRendererData>(
+                "Assets/Settings/Open Brush Universal Render Pipeline Asset_Renderer.asset");
+            var postProcessing = App.Instance.GetComponent<UrpPostProcessingController>();
+            if (editorSettings == null || mobileQuality == null || m_Renderer == null ||
+                postProcessing == null)
+            {
+                throw new BuildFailedException("Could not load the Quest rendering settings.");
+            }
+
+            m_EditorSettings = new SerializedObject(editorSettings);
+            m_MobileQuality = new SerializedObject(mobileQuality);
+            m_Offscreen = m_EditorSettings.FindProperty("m_vulkanOffscreenSwapchainNoMainDisplay").boolValue;
+            m_Hdr = mobileQuality.Hdr;
+            m_Msaa = mobileQuality.MsaaLevel;
+            m_IntermediateTexture = m_Renderer.intermediateTextureMode;
+
+            try
+            {
+                ApplySettings(true, false, 2, IntermediateTextureMode.Auto);
+
+                // The enclosing scene scope restores this change after building Main.
+                var postSettings = new SerializedObject(postProcessing);
+                postSettings.FindProperty("m_EnablePostProcessingOnMainCameras").boolValue = false;
+                postSettings.ApplyModifiedPropertiesWithoutUndo();
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
+
+        void ApplySettings(bool offscreen, bool hdr, int msaa, IntermediateTextureMode intermediateTexture)
+        {
+            m_EditorSettings.Update();
+            m_EditorSettings.FindProperty("m_vulkanOffscreenSwapchainNoMainDisplay").boolValue = offscreen;
+            m_EditorSettings.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssetIfDirty(m_EditorSettings.targetObject);
+
+            m_MobileQuality.Update();
+            m_MobileQuality.FindProperty("m_Hdr").boolValue = hdr;
+            m_MobileQuality.FindProperty("m_MsaaLevel").intValue = msaa;
+            m_MobileQuality.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssetIfDirty(m_MobileQuality.targetObject);
+
+            m_Renderer.intermediateTextureMode = intermediateTexture;
+            EditorUtility.SetDirty(m_Renderer);
+            AssetDatabase.SaveAssetIfDirty(m_Renderer);
+        }
+
+        public void Dispose()
+        {
+            if (m_EditorSettings != null)
+                ApplySettings(m_Offscreen, m_Hdr, m_Msaa, m_IntermediateTexture);
+        }
+    }
+
     class TempSetOpenXrFeatureGroup : IDisposable
     {
         readonly List<UnityEngine.XR.OpenXR.Features.OpenXRFeature> enabledFeatures;
@@ -1388,7 +1471,16 @@ static class BuildTiltBrush
             // Meta store builds use OpenXR too, but must enable Meta's build hooks explicitly.
             EnableRequiredFeature<UnityEngine.XR.OpenXR.Features.MetaQuestSupport.MetaQuestFeature>(settings);
 #endif
+            if (tiltOptions.QuestRendering)
+                SetOptimizeBufferDiscards(settings, true);
+        }
 
+        static void SetOptimizeBufferDiscards(UnityEngine.XR.OpenXR.OpenXRSettings settings, bool enabled)
+        {
+            var serializedSettings = new SerializedObject(settings);
+            serializedSettings.FindProperty("m_optimizeBufferDiscards").boolValue = enabled;
+            serializedSettings.ApplyModifiedPropertiesWithoutUndo();
+            AssetDatabase.SaveAssetIfDirty(settings);
         }
 
         void EnableSharedAndroidOpenXrFeatures(
@@ -1534,14 +1626,7 @@ static class BuildTiltBrush
             }
 
             if (m_Settings != null)
-            {
-                var serializedSettings = new SerializedObject(m_Settings);
-                serializedSettings.FindProperty("m_optimizeBufferDiscards").boolValue =
-                    m_OptimizeBufferDiscards;
-                serializedSettings.ApplyModifiedPropertiesWithoutUndo();
-                EditorUtility.SetDirty(m_Settings);
-                AssetDatabase.SaveAssetIfDirty(m_Settings);
-            }
+                SetOptimizeBufferDiscards(m_Settings, m_OptimizeBufferDiscards);
         }
     }
 
@@ -1980,6 +2065,9 @@ static class BuildTiltBrush
     //
     public static void DoBuild(TiltBuildOptions tiltOptions)
     {
+        if (tiltOptions.QuestRendering && (tiltOptions.Target != BuildTarget.Android ||
+            tiltOptions.XrSdk != XrSdkMode.OpenXR || tiltOptions.AndroidBuildAppBundle))
+            throw new BuildFailedException("Quest rendering requires an Android OpenXR APK build.");
         if (tiltOptions.Target == BuildTarget.Android && tiltOptions.XrSdk == XrSdkMode.Monoscopic &&
             !IsHandheldViewer(tiltOptions.Target, tiltOptions.XrSdk))
             throw new BuildFailedException("Android Monoscopic is supported only for OPEN_BRUSH_VIEWER builds.");
@@ -2029,6 +2117,7 @@ static class BuildTiltBrush
         using (var unused7 = new TempSetXrPlugin(tiltOptions))
         using (var unused15 = new TempSetPlayerSettings(tiltOptions))
         using (var unused13 = new TempSetOpenXrFeatureGroup(tiltOptions))
+        using (var questRendering = new TempSetQuestRendering(tiltOptions))
         using (var unused9 = new RestoreFileContents(
             Path.Combine(Path.GetDirectoryName(Application.dataPath),
                 "ProjectSettings/GraphicsSettings.asset")))

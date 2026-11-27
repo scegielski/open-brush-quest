@@ -180,7 +180,6 @@ namespace TiltBrush
                 -1,
                 path
             );
-            PanelManager.m_Instance.ToggleSketchbookPanels(true);
         }
 
         [ApiEndpoint(
@@ -585,7 +584,7 @@ namespace TiltBrush
                 ?.GetLoadedSubsystem<UnityEngine.XR.XRDisplaySubsystem>();
             var foveationFeature = UnityEngine.XR.OpenXR.OpenXRSettings.Instance
                 ?.GetFeature<UnityEngine.XR.OpenXR.Features.FoveatedRenderingFeature>();
-            return $"Quality level={quality.QualityLevel} levels={quality.AppQualityLevels.Length} " +
+            return $"Quality level={quality.QualityLevel} levels={quality.MaxQualityLevel + 1} " +
                 $"automatic={quality.AutomaticQualityEnabled} fps={quality.FramesInLastSecond} " +
                 $"viewportRequested={UnityEngine.XR.XRSettings.renderViewportScale} " +
                 $"viewportApplied={UnityEngine.XR.XRSettings.appliedRenderViewportScale} " +
@@ -606,7 +605,7 @@ namespace TiltBrush
             return GetQualityLevel();
         }
 
-        [ApiEndpoint("quality.configure", "Sets a level's foveation; MSAA must match the fixed session value", "3,4,0")]
+        [ApiEndpoint("quality.configure", "Sets a level's foveation; MSAA must match the fixed session value", "1,4,0")]
         public static string ConfigureQualityLevel(int level, int msaa, int foveation)
         {
             if (QualityControls.m_Instance == null) return "QualityControls is not available.";
@@ -641,7 +640,7 @@ namespace TiltBrush
             return $"Configured lower={lowerFps}/{lowerFrames} higher={higherFps}/{higherFrames} for this session.";
         }
 
-        [ApiEndpoint("quality.set", "Sets the current quality level by index", "2")]
+        [ApiEndpoint("quality.set", "Sets the current quality level by index", "1")]
         public static string SetQualityLevel(int level)
         {
             if (QualityControls.m_Instance == null)
@@ -649,7 +648,7 @@ namespace TiltBrush
                 return "QualityControls is not available.";
             }
 
-            int maxLevel = QualityControls.m_Instance.AppQualityLevels.Length - 1;
+            int maxLevel = QualityControls.m_Instance.MaxQualityLevel;
             if (level < 0 || level > maxLevel)
             {
                 return $"Quality level {level} is out of range 0..{maxLevel}.";

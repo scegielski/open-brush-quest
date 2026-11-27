@@ -9,6 +9,7 @@ $builds = @(
     @{ Name='Android Viewer AndroidXR'; Target='Android'; Sdk='AndroidXR'; Api=35; Bundle=$true; Define='OPEN_BRUSH_VIEWER' }
     @{ Name='Android Viewer Handheld'; Target='Android'; Sdk='Monoscopic'; Api=35; Bundle=$false; Define='OPEN_BRUSH_VIEWER' }
     @{ Name='Android Meta Quest'; Target='Android'; Sdk='OpenXR'; Api=34; Bundle=$false; Define='USE_QUEST_PACKAGE_NAME' }
+    @{ Name='Android Quest Sideload'; Target='Android'; Sdk='OpenXR'; Api=34; Bundle=$false; QuestRendering=$true }
 )
 for ($i=0; $i -lt $builds.Count; $i++) { Write-Host "$($i+1). $($builds[$i].Name)" }
 $choice = Read-Host "Select build (1-$($builds.Count))"
@@ -40,6 +41,7 @@ if ($selected.Target -eq 'Android') {
     $arguments += @('-btb-il2cpp', '-btb-android-target-sdk', $selected.Api, '-androidExportType', $export)
 }
 if ($development) { $arguments += @('-btb-bopt', 'Development') }
+if ($selected.QuestRendering) { $arguments += '-btb-quest-rendering' }
 
 # CI selects Viewer/Quest through csc.rsp; restore the original file after building.
 $responseFile = Join-Path $project 'Assets/csc.rsp'

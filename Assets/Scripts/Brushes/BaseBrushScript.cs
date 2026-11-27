@@ -179,6 +179,12 @@ namespace TiltBrush
             get { return m_Color; }
         }
 
+        internal bool MatchesColor(Color color)
+        {
+            // Compare at the precision used by the brush's geometry.
+            return CurrentColor == (Color)(Color32)color;
+        }
+
         /// The setter should only be used during initialization.
         public int RandomSeed
         {

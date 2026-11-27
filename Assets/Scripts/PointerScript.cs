@@ -1038,14 +1038,19 @@ namespace TiltBrush
                 OnBrushChange(rBrush);
             }
 
-            if (m_CurrentBrush != rBrush)
-            {
-                m_CurrentBrush = rBrush;
-                ShowSizeIndicator(m_ShowBrushSizeIndicator);
-                if (m_BrushPressureIndicator)
-                    m_BrushPressureIndicator.gameObject.SetActive(ShowsBrushRadiusIndicators);
-            }
+            SetCurrentBrushDescriptor(rBrush);
             ResetAudio();
+        }
+
+        private void SetCurrentBrushDescriptor(BrushDescriptor brush)
+        {
+            if (m_CurrentBrush == brush)
+                return;
+
+            m_CurrentBrush = brush;
+            ShowSizeIndicator(m_ShowBrushSizeIndicator);
+            if (m_BrushPressureIndicator)
+                m_BrushPressureIndicator.gameObject.SetActive(ShowsBrushRadiusIndicators);
         }
 
         private bool ShowsBrushRadiusIndicators =>
@@ -1494,7 +1499,7 @@ namespace TiltBrush
             transform.position = xf_RS.translation;
             transform.rotation = xf_RS.rotation;
 
-            m_CurrentBrush = rBrush;
+            SetCurrentBrushDescriptor(rBrush);
             m_CurrentBrushSize = stroke.m_BrushSize;
             m_CurrentPressure = cp0.m_Pressure;
             m_CurrentColor = stroke.m_Color;

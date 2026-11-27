@@ -214,6 +214,22 @@ namespace TiltBrush
             Assert.That(kneeNormals, Has.Length.EqualTo(2), "Both rear faces keep their own normal at the knee.");
         }
 
+        [Test]
+        public void DraftPreviewColorMatchesTheSamePaletteColorAfterBrushCreation()
+        {
+            var descriptor = AssetDatabase.LoadAssetAtPath<BrushDescriptor>(
+                "Assets/Resources/Brushes/Basic/Transition/Transition.asset");
+            var paletteColor = new Color(0.5f, 0.5f, 0.5f, 1f);
+            LogAssert.Expect(LogType.Error,
+                "Instantiating mesh due to calling MeshFilter.mesh during edit mode. This will leak meshes. Please use MeshFilter.sharedMesh instead.");
+            var brush = BaseBrushScript.Create(m_Parent.transform, TrTransform.T(Vector3.up), descriptor,
+                paletteColor, 54f * TransitionBrush.UnitsPerInch);
+            m_Meshes.Add(brush.GetComponent<MeshFilter>().sharedMesh);
+
+            Assert.That(brush.MatchesColor(paletteColor), Is.True);
+            Assert.That(brush.MatchesColor(new Color(0.52f, 0.5f, 0.5f, 1f)), Is.False);
+        }
+
         private Mesh DrawSavedTransition(string asset, IReadOnlyList<TrTransform> samples, float radius,
             int turns, float deckInches, TrTransform[] controls = null, bool? draftClosed = null)
         {
